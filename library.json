@@ -1,0 +1,16 @@
+{
+  "name": "UMOZ",
+  "version": "1.1.0",
+  "description": "An ultra-lightweight, high-performance Arduino multitasking framework featuring a background task scheduler, independent non-blocking macro timers, real-time CPU profiling, and zero-overhead analog filtering.",
+  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, benchmark, non-blocking, timing, fast-adc, ema-filter, hardware-debounce",
+  "authors": [
+    {
+      "name": "Moaaz",
+      "maintainer": true
+    }
+  ],
+  "homepage": "https://github.com/Moaaz-i/UMOZ",
+  "frameworks": "arduino",
+  "platforms": "*",
+  "examples": "examples/*/*.ino"
+}
