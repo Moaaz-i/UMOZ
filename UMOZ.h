@@ -3,14 +3,7 @@
  * ----------------------------------------------------------------------------
  * Description: An ultra-lightweight, high-performance Arduino library designed
  * to simplify multitasking and optimize system resource management.
- * * Key Features:
- * - Non-blocking Multi-Timers using unique macro-line expansion.
- * - Non-blocking Background Task Scheduler via function pointers.
- * - Real-time CPU Usage Benchmarking (Idle Loop Calculation).
- * - High-speed digital toggle utilizing Direct Port Manipulation (AVR).
- * - Zero-overhead Analog Filtering via Exponential Moving Average (EMA).
- * - Built-in hardware switch debouncing and zero-cost debug logging.
- * - Memory-efficient Architecture utilizing the Singleton design pattern.
+ * Version: 1.2.0 (Priority-Scheduler & Diagnostics Edition)
  * ----------------------------------------------------------------------------
  */
 
@@ -31,11 +24,18 @@
 
 typedef void (*umoz_task_t)();
 
+enum UMOZPriority {
+    UMOZ_LOW = 0,
+    UMOZ_MEDIUM = 1,
+    UMOZ_HIGH = 2
+};
+
 struct UMOZ_Task {
-  umoz_task_t func;
-  uint32_t interval;
-  uint32_t lastRun;
-  bool active;
+    void (*taskFunction)();
+    uint32_t interval;
+    uint32_t lastRun;
+    UMOZPriority priority;
+    bool isActive;
 };
 
 class UMOZ {
@@ -69,7 +69,7 @@ class UMOZ {
     void initLibrary();
     int getCPUUsage();
 
-    bool addTask(umoz_task_t func, uint32_t intervalMs);
+    bool addTask(umoz_task_t func, uint32_t intervalMs, UMOZPriority priority = UMOZ_MEDIUM);
     void runTasks();
 
     inline void benchTick() { _idleCounter++; }

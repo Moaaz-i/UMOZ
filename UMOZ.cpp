@@ -2,7 +2,7 @@
  * UMOZ Library Implementation File
  * ----------------------------------------------------------------------------
  * Implements the Singleton pattern core, real-time CPU benchmark calibration,
- * EMA filtering arithmetic, and the background task dispatcher loop.
+ * EMA filtering arithmetic, and the priority-aware task dispatcher loop.
  * ----------------------------------------------------------------------------
  */
 
@@ -18,7 +18,7 @@ UMOZ::UMOZ() {
 
   _taskCount = 0;
   for(uint8_t i = 0; i < UMOZ_MAX_TASKS; i++) {
-     _tasks[i].active = false;
+     _tasks[i].isActive = false;
   }
 }
 
@@ -47,8 +47,7 @@ int UMOZ::getCPUUsage() {
     if (_idleCounter > _maxIdle) _maxIdle = _idleCounter;
 
     int usage = 100 - ((_idleCounter * 100) / (_maxIdle == 0 ? 1 : _maxIdle));
-    if (usage < 0) usage = 0;
-    if (usage > 100) usage = 100;
+    usage = constrain(usage, 0, 100);
 
     _idleCounter = 0;
     _cpuCheckMillis = millis();
@@ -83,12 +82,13 @@ bool UMOZ::isButtonPressed(uint8_t buttonPin) {
   return false;
 }
 
-bool UMOZ::addTask(umoz_task_t func, uint32_t intervalMs) {
+bool UMOZ::addTask(umoz_task_t func, uint32_t intervalMs, UMOZPriority priority) {
   if (_taskCount < UMOZ_MAX_TASKS) {
-    _tasks[_taskCount].func = func;
+    _tasks[_taskCount].taskFunction = func;
     _tasks[_taskCount].interval = intervalMs;
     _tasks[_taskCount].lastRun = millis();
-    _tasks[_taskCount].active = true;
+    _tasks[_taskCount].priority = priority;
+    _tasks[_taskCount].isActive = true;
     _taskCount++;
     return true;
   }
@@ -97,10 +97,23 @@ bool UMOZ::addTask(umoz_task_t func, uint32_t intervalMs) {
 
 void UMOZ::runTasks() {
   uint32_t currentMillis = millis();
+  int targetIndex = -1;
+  int highestPriority = -1;
+
   for (uint8_t i = 0; i < _taskCount; i++) {
-    if (_tasks[i].active && (currentMillis - _tasks[i].lastRun >= _tasks[i].interval)) {
-      _tasks[i].lastRun = currentMillis;
-      _tasks[i].func();
+    if (_tasks[i].isActive) {
+      if (currentMillis - _tasks[i].lastRun >= _tasks[i].interval) {
+        // العثور على المهمة المستحقة ذات الأولوية الأعلى لضمان التنفيذ الحرج
+        if ((int)_tasks[i].priority > highestPriority) {
+          highestPriority = (int)_tasks[i].priority;
+          targetIndex = i;
+        }
+      }
     }
+  }
+
+  if (targetIndex != -1) {
+    _tasks[targetIndex].taskFunction();
+    _tasks[targetIndex].lastRun = currentMillis;
   }
 }
