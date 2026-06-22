@@ -1,14 +1,14 @@
 /*
- * UMOZ Library for Arduino
+ * MicroTaskX Library for Arduino
  * ----------------------------------------------------------------------------
  * Description: An ultra-lightweight, high-performance Arduino library designed
  * to simplify multitasking and optimize system resource management.
- * Version: 2.5.0 (Optimized Memory & High-Efficiency Edition)
+ * Version: 2.5.١ (Optimized Memory & High-Efficiency Edition)
  * ----------------------------------------------------------------------------
- */
+*/
 
-#ifndef UMOZ_h
-#define UMOZ_h
+#ifndef MICROTASKX_H
+#define MICROTASKX_H
 
 #include "Arduino.h"
 
@@ -17,27 +17,27 @@
   #include <avr/power.h>
 #endif
 
-#ifdef UMOZ_DEBUG_MODE
-  #define UMOZ_PRINT(x) Serial.print(x)
-  #define UMOZ_PRINTLN(x) Serial.println(x)
+#ifdef MTX_DEBUG_MODE
+  #define MTX_PRINT(x)   Serial.print(x)
+  #define MTX_PRINTLN(x) Serial.println(x)
 #else
-  #define UMOZ_PRINT(x)
-  #define UMOZ_PRINTLN(x)
+  #define MTX_PRINT(x)
+  #define MTX_PRINTLN(x)
 #endif
 
-#ifndef UMOZ_MAX_TASKS
-  #define UMOZ_MAX_TASKS 5
+#ifndef MTX_MAX_TASKS
+  #define MTX_MAX_TASKS 5
 #endif
 
-typedef void (*umoz_task_t)();
+typedef void (*mtx_task_t)();
 
-enum UMOZPriority : uint8_t {
-    UMOZ_LOW = 0,
-    UMOZ_MEDIUM = 1,
-    UMOZ_HIGH = 2
+enum MTXPriority : uint8_t {
+    MTX_LOW    = 0,
+    MTX_MEDIUM = 1,
+    MTX_HIGH   = 2
 };
 
-struct UMOZ_Task {
+struct MTX_Task {
     void (*taskFunction)();
     uint32_t interval;
     uint32_t lastRun;
@@ -45,7 +45,7 @@ struct UMOZ_Task {
     uint8_t isActive : 1;
 };
 
-class UMOZ {
+class MicroTaskX {
   private:
     uint8_t _pin;
     uint32_t _previousMillisBlink;
@@ -55,26 +55,26 @@ class UMOZ {
     uint32_t _maxIdle;
     uint32_t _cpuCheckMillis;
 
-    UMOZ_Task _tasks[UMOZ_MAX_TASKS];
+    MTX_Task _tasks[MTX_MAX_TASKS];
     uint8_t _taskCount;
     bool _smartSleepEnabled;
 
-    UMOZ();
-    UMOZ(const UMOZ&) = delete;
-    UMOZ& operator=(const UMOZ&) = delete;
+    MicroTaskX();
+    MicroTaskX(const MicroTaskX&) = delete;
+    MicroTaskX& operator=(const MicroTaskX&) = delete;
 
   public:
-    static UMOZ& getInstance() {
-      static UMOZ instance;
+    static MicroTaskX& getInstance() {
+      static MicroTaskX instance;
       return instance;
     }
 
     void begin(uint8_t pin);
     void blink(uint32_t delayTime);
     void initLibrary();
-    int getCPUUsage();
+    int  getCPUUsage();
 
-    bool addTask(umoz_task_t func, uint32_t intervalMs, UMOZPriority priority = UMOZ_MEDIUM);
+    bool addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority = MTX_MEDIUM);
     void runTasks();
 
     void enableSmartSleep(bool enable) { _smartSleepEnabled = enable; }
@@ -94,12 +94,14 @@ class UMOZ {
     inline void toggle(uint8_t pin) {
       digitalWrite(pin, !digitalRead(pin));
     }
+
     template <uint8_t ANALOG_PIN>
     int smoothReadFast() {
       int newRead = analogRead(ANALOG_PIN);
       _smoothedAnalog = (_smoothedAnalog * 7 + newRead) >> 3;
       return _smoothedAnalog;
     }
+
     int smoothRead(uint8_t analogPin);
 
     bool isButtonPressed(uint8_t buttonPin, uint32_t &lastDebounceTime) {
@@ -111,6 +113,7 @@ class UMOZ {
       }
       return false;
     }
+
     bool isButtonPressed(uint8_t buttonPin);
 
     inline int toPercentage(int rawValue, int minRaw, int maxRaw) {
@@ -118,29 +121,29 @@ class UMOZ {
     }
 };
 
-#define tool UMOZ::getInstance()
+#define mtx MicroTaskX::getInstance()
 
-#define UMOZ_START() \
+#define MTX_START() \
 void setup(); \
-void __umoz_internal_setup() { tool.initLibrary(); } \
-void setup() { __umoz_internal_setup();
+void __mtx_internal_setup() { mtx.initLibrary(); } \
+void setup() { __mtx_internal_setup();
 
-#define UMOZ_RUN() \
+#define MTX_RUN() \
 } \
 void loop() { \
-  tool.benchTick(); \
-  tool.runTasks();
+  mtx.benchTick(); \
+  mtx.runTasks();
 
-#define _UMOZ_CONCAT_INNER(a, b) a ## b
-#define _UMOZ_CONCAT(a, b) _UMOZ_CONCAT_INNER(a, b)
+#define _MTX_CONCAT_INNER(a, b) a ## b
+#define _MTX_CONCAT(a, b) _MTX_CONCAT_INNER(a, b)
 
-#define UMOZ_EVERY_MS(ms) \
-  static uint32_t _UMOZ_CONCAT(_prev_time_, __LINE__) = 0; \
-  if (millis() - _UMOZ_CONCAT(_prev_time_, __LINE__) >= (ms) && (_UMOZ_CONCAT(_prev_time_, __LINE__) = millis(), true))
+#define MTX_EVERY_MS(ms) \
+  static uint32_t _MTX_CONCAT(_prev_time_, __LINE__) = 0; \
+  if (millis() - _MTX_CONCAT(_prev_time_, __LINE__) >= (ms) && (_MTX_CONCAT(_prev_time_, __LINE__) = millis(), true))
 
-#define UMOZ_EVERY_HZ(hz) UMOZ_EVERY_MS((hz) == 0 ? 0 : 1000 / (hz))
-#define UMOZ_EVERY(ms) UMOZ_EVERY_MS(ms)
+#define MTX_EVERY_HZ(hz) MTX_EVERY_MS((hz) == 0 ? 0 : 1000 / (hz))
+#define MTX_EVERY(ms)    MTX_EVERY_MS(ms)
 
-#define UMOZ_END \
+#define MTX_END \
 }
 #endif

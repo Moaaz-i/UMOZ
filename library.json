@@ -1,15 +1,15 @@
 {
-  "name": "UMOZ",
-  "version": "2.5.0",
-  "description": "An ultra-lightweight, high-performance Arduino multitasking framework featuring a priority-based background scheduler, macro-driven non-blocking timers, real-time CPU profiling, and zero-overhead analog smoothing.",
-  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, benchmark, non-blocking, timing, fast-adc, ema-filter, hardware-debounce, rtos, micro-rtos",
+  "name": "MicroTaskX",
+  "version": "v2.5.1",
+  "description": "An ultra-lightweight, high-performance Arduino multitasking framework featuring a priority-based scheduler, macro-driven non-blocking timers, real-time CPU profiling, and zero-overhead analog smoothing.",
+  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, non-blocking, timing, fast-adc, ema-filter, micro-rtos, performance",
   "authors": [
     {
       "name": "Moaaz Yahia Shrif",
       "maintainer": true
     }
   ],
-  "homepage": "https://github.com/Moaaz-i/UMOZ",
+  "homepage": "https://github.com/Moaaz-i/MicroTaskX",
   "frameworks": "arduino",
   "platforms": "*",
   "examples": "examples/*/*.ino"

@@ -1,27 +1,27 @@
-#include "UMOZ.h"
+#include "MicroTaskX.h"
 
-UMOZ::UMOZ() {
+MicroTaskX::MicroTaskX() {
   _previousMillisBlink = 0;
-  _smoothedAnalog = 0;
-  _idleCounter = 0;
-  _maxIdle = 0;
-  _cpuCheckMillis = 0;
-  _taskCount = 0;
-  _smartSleepEnabled = false;
+  _smoothedAnalog      = 0;
+  _idleCounter         = 0;
+  _maxIdle             = 0;
+  _cpuCheckMillis      = 0;
+  _taskCount           = 0;
+  _smartSleepEnabled   = false;
 
-  for(uint8_t i = 0; i < UMOZ_MAX_TASKS; i++) {
-     _tasks[i].isActive = false;
+  for (uint8_t i = 0; i < MTX_MAX_TASKS; i++) {
+    _tasks[i].isActive = false;
   }
 }
 
-void UMOZ::begin(uint8_t pin) {
+void MicroTaskX::begin(uint8_t pin) {
   _pin = pin;
   pinMode(_pin, OUTPUT);
 }
 
-void UMOZ::initLibrary() {
+void MicroTaskX::initLibrary() {
   #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-    ADCSRA = (ADCSRA & 0xf8) | 0x04;
+    ADCSRA = (ADCSRA & 0xF8) | 0x04;
   #endif
 
   uint32_t startWin = millis();
@@ -29,12 +29,12 @@ void UMOZ::initLibrary() {
   while (millis() - startWin < 50) {
     _idleCounter++;
   }
-  _maxIdle = _idleCounter * 20;
-  _idleCounter = 0;
+  _maxIdle        = _idleCounter * 20;
+  _idleCounter    = 0;
   _cpuCheckMillis = millis();
 }
 
-int UMOZ::getCPUUsage() {
+int MicroTaskX::getCPUUsage() {
   uint32_t currentMillis = millis();
   if (currentMillis - _cpuCheckMillis >= 1000) {
     if (_maxIdle == 0) _maxIdle = 1;
@@ -42,14 +42,14 @@ int UMOZ::getCPUUsage() {
     long usage = 100 - (((long)_idleCounter * 100) / _maxIdle);
     usage = constrain(usage, 0, 100);
 
-    _idleCounter = 0;
+    _idleCounter    = 0;
     _cpuCheckMillis = currentMillis;
     return (int)usage;
   }
   return -1;
 }
 
-void UMOZ::blink(uint32_t delayTime) {
+void MicroTaskX::blink(uint32_t delayTime) {
   uint32_t currentMillis = millis();
   if (currentMillis - _previousMillisBlink >= delayTime) {
     _previousMillisBlink = currentMillis;
@@ -57,35 +57,35 @@ void UMOZ::blink(uint32_t delayTime) {
   }
 }
 
-int UMOZ::smoothRead(uint8_t analogPin) {
+int MicroTaskX::smoothRead(uint8_t analogPin) {
   int newRead = analogRead(analogPin);
   _smoothedAnalog = (_smoothedAnalog * 7 + newRead) >> 3;
   return _smoothedAnalog;
 }
 
-bool UMOZ::isButtonPressed(uint8_t buttonPin) {
+bool MicroTaskX::isButtonPressed(uint8_t buttonPin) {
   static uint32_t defaultDebounce = 0;
   return isButtonPressed(buttonPin, defaultDebounce);
 }
 
-bool UMOZ::addTask(umoz_task_t func, uint32_t intervalMs, UMOZPriority priority) {
-  if (_taskCount < UMOZ_MAX_TASKS) {
+bool MicroTaskX::addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority) {
+  if (_taskCount < MTX_MAX_TASKS) {
     _tasks[_taskCount].taskFunction = func;
-    _tasks[_taskCount].interval = intervalMs;
-    _tasks[_taskCount].lastRun = millis();
-    _tasks[_taskCount].priority = static_cast<uint8_t>(priority);
-    _tasks[_taskCount].isActive = true;
+    _tasks[_taskCount].interval     = intervalMs;
+    _tasks[_taskCount].lastRun      = millis();
+    _tasks[_taskCount].priority     = static_cast<uint8_t>(priority);
+    _tasks[_taskCount].isActive     = true;
     _taskCount++;
     return true;
   }
   return false;
 }
 
-void UMOZ::runTasks() {
-  uint32_t currentMillis = millis();
-  int targetIndex = -1;
-  int highestPriority = -1;
-  uint32_t minTimeToNextTask = 0xFFFFFFFF;
+void MicroTaskX::runTasks() {
+  uint32_t currentMillis      = millis();
+  int      targetIndex        = -1;
+  int      highestPriority    = -1;
+  uint32_t minTimeToNextTask  = 0xFFFFFFFF;
 
   for (uint8_t i = 0; i < _taskCount; i++) {
     if (_tasks[i].isActive) {
@@ -94,7 +94,7 @@ void UMOZ::runTasks() {
       if (timeElapsed >= _tasks[i].interval) {
         if (static_cast<int>(_tasks[i].priority) > highestPriority) {
           highestPriority = static_cast<int>(_tasks[i].priority);
-          targetIndex = i;
+          targetIndex     = i;
         }
       } else {
         uint32_t timeLeft = _tasks[i].interval - timeElapsed;
@@ -115,7 +115,7 @@ void UMOZ::runTasks() {
   }
 }
 
-void UMOZ::enterLowPowerSleep() {
+void MicroTaskX::enterLowPowerSleep() {
   #if defined(__AVR__)
     set_sleep_mode(SLEEP_MODE_IDLE);
     sleep_enable();
@@ -126,5 +126,6 @@ void UMOZ::enterLowPowerSleep() {
     power_all_enable();
     _idleCounter += 120;
   #elif defined(ARDUINO_ARCH_ESP32)
+    // Placeholder for future ESP32 low-power integration
   #endif
 }

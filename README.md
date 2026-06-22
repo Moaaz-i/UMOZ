@@ -1,43 +1,31 @@
-UMOZ 🚀
-An ultra-lightweight, high-performance multitasking framework and micro-RTOS designed for Arduino. UMOZ maximizes CPU efficiency by eliminating blocking delays, introducing independent macro-based timers, an advanced background task scheduler, and real-time CPU load profiling.
+# MicroTaskX 🚀
 
-✨ Features
-Micro-RTOS Task Scheduler: Register background tasks using function pointers without dynamic memory allocation (RAM safe).
+An ultra-lightweight, high-performance multitasking framework and micro-RTOS designed for Arduino.
+MicroTaskX maximizes CPU efficiency by eliminating blocking delays, introducing independent macro-based timers, an advanced background task scheduler, and real-time CPU load profiling.
 
-Independent Macro Timers (UMOZ_EVERY): Create non-blocking independent intervals easily on any line using token-pasting macro expansions.
+## ✨ Features
 
-Real-time CPU Profiling: Monitor actual CPU load percentage dynamically via free idle-loop calculation.
+- **Micro-RTOS Task Scheduler:** Register background tasks using function pointers without dynamic memory allocation (RAM safe).
+- **Independent Macro Timers (`MTX_EVERY`):** Create non-blocking independent intervals easily on any line using token-pasting macro expansions.
+- **Real-time CPU Profiling:** Monitor actual CPU load percentage dynamically via free idle-loop calculation.
+- **Turbo ADC Speed:** Injects hardware register tweaks to speed up analog readings by up to 8x on supported AVR boards.
+- **Direct Port Manipulation:** High-speed `toggleFast()` routine that executes in a single clock cycle on AVR microcontrollers.
+- **Zero-Overhead Smoothing:** Built-in Exponential Moving Average (EMA) filter for analog inputs to keep the loop fluid and non-blocking.
+- **Hardware Switch Debouncing:** Built-in non-blocking button press stabilization.
 
-Turbo ADC Speed: Injects hardware register tweaks to speed up analog readings by up to 8x on supported AVR boards.
-
-Direct Port Manipulation: High-speed toggle() routine that executes in a single clock cycle on AVR microcontrollers.
-
-Zero-Overhead Smoothing: Built-in Exponential Moving Average (EMA) filter for analog inputs to keep the loop fluid and non-blocking.
-
-Hardware Switch Debouncing: Built-in non-blocking button press stabilization.
-
-📦 Installation
-Download this repository as a .ZIP file.
-
-Open your Arduino IDE.
-
-Go to Sketch → Include Library → Add .ZIP Library…
-
-Select the downloaded UMOZ.zip file.
-
-🛠️ Quick Start & Usage
+## 🛠 Quick Start
 
 ```cpp
-#include <UMOZ.h>
+#include <MicroTaskX.h>
 
-const uint8_t LED_PIN = 13;
+const uint8_t LED_PIN    = 13;
 const uint8_t BUTTON_PIN = 2;
 const uint8_t SENSOR_PIN = A0;
 
-// --- Background Task 1: Read and Filter Analog Sensor ---
+// Background Task 1: Read and filter analog sensor
 void readSensorTask() {
-  int filteredValue = tool.smoothRead(SENSOR_PIN);
-  int percentage = tool.toPercentage(filteredValue, 0, 1023);
+  int filteredValue = mtx.smoothRead(SENSOR_PIN);
+  int percentage    = mtx.toPercentage(filteredValue, 0, 1023);
 
   Serial.print(F("[Task 1] Sensor Value: "));
   Serial.print(filteredValue);
@@ -46,9 +34,9 @@ void readSensorTask() {
   Serial.println(F("%"));
 }
 
-// --- Background Task 2: Monitor System CPU Load ---
+// Background Task 2: Monitor CPU load
 void monitorCPUTask() {
-  int cpuLoad = tool.getCPUUsage();
+  int cpuLoad = mtx.getCPUUsage();
   if (cpuLoad != -1) {
     Serial.print(F("[Task 2] Real-time CPU Usage: "));
     Serial.print(cpuLoad);
@@ -56,33 +44,28 @@ void monitorCPUTask() {
   }
 }
 
-UMOZ_START()
+MTX_START()
   Serial.begin(9600);
 
-  // Initialize Hardware Components
-  tool.begin(LED_PIN);
+  mtx.begin(LED_PIN);
   pinMode(BUTTON_PIN, INPUT);
 
-  // Register Background Tasks to the Scheduler
-  tool.addTask(readSensorTask, 500);   // Runs every 500ms
-  tool.addTask(monitorCPUTask, 2000);  // Runs every 2000ms
+  mtx.addTask(readSensorTask,   500);   // every 500ms
+  mtx.addTask(monitorCPUTask,  2000);   // every 2000ms
 
-UMOZ_RUN()
-  // 1. Independent Multi-Timer (Flashes LED every 1000ms)
-  UMOZ_EVERY_MS(1000) {
-    tool.toggle(LED_PIN);
-    Serial.println(F("[Timer] LED Toggled via UMOZ_EVERY_MS"));
+MTX_RUN()
+  MTX_EVERY_MS(1000) {
+    mtx.toggle(LED_PIN);
+    Serial.println(F("[Timer] LED toggled via MTX_EVERY_MS"));
   }
 
-  // 2. High-Frequency independent Timer (Runs at 1Hz)
-  UMOZ_EVERY_HZ(1) {
-    Serial.println(F("[Timer] Heartbeat ticking at 1 Hz..."));
+  MTX_EVERY_HZ(1) {
+    Serial.println(F("[Timer] Heartbeat at 1 Hz..."));
   }
 
-  // 3. Non-blocking Hardware Debounced Button Press Detection
-  if (tool.isButtonPressed(BUTTON_PIN)) {
-    Serial.println(F("[Event] Button pressed! (Hardware Debounced)"));
+  if (mtx.isButtonPressed(BUTTON_PIN)) {
+    Serial.println(F("[Event] Button pressed! (Debounced)"));
   }
 
-UMOZ_END
+MTX_END
 ```
