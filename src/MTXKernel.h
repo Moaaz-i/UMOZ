@@ -18,7 +18,7 @@
   #define MTX_PRINTLN(x)
 #endif
 
-typedef void (*mtx_task_t)();
+typedef void (*mtx_task_t)(void*);
 
 enum MTXPriority : uint8_t {
     MTX_LOW    = 0,
@@ -27,12 +27,14 @@ enum MTXPriority : uint8_t {
 };
 
 struct MTX_Task {
-    void (*taskFunction)();
+    mtx_task_t taskFunction;
+    void* arg;
     uint32_t interval;
     uint32_t lastRun;
     uint8_t priority : 2;
     uint8_t isActive : 1;
     uint8_t isOneShot : 1;
+    uint8_t isMicros : 1;
 };
 
 template <uint8_t MAX_TASKS = 5>
@@ -42,17 +44,16 @@ class MicroTaskXKernel {
     uint32_t _maxIdle;
     uint32_t _cpuCheckMillis;
     MTX_Task _tasks[MAX_TASKS];
-    uint8_t _taskCount;
     bool _smartSleepEnabled;
 
     MicroTaskXKernel() {
       _idleCounter       = 0;
       _maxIdle           = 0;
       _cpuCheckMillis    = 0;
-      _taskCount         = 0;
       _smartSleepEnabled = false;
       for (uint8_t i = 0; i < MAX_TASKS; i++) {
-        _tasks[i].isActive = false;
+        _tasks[i].taskFunction = nullptr;
+        _tasks[i].isActive     = false;
       }
     }
 
@@ -78,6 +79,7 @@ class MicroTaskXKernel {
       _maxIdle        = _idleCounter * 20;
       _idleCounter    = 0;
       _cpuCheckMillis = millis();
+      MTX_PRINTLN(F("[MTX] Kernel Initialized Successfully."));
     }
 
     int getCPUUsage() {
@@ -93,14 +95,32 @@ class MicroTaskXKernel {
       return -1;
     }
 
-    bool addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority = MTX_MEDIUM) {
-      return _addInternal(func, intervalMs, priority, false);
+    bool addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
+      return _addInternal(func, intervalMs, priority, false, arg, false);
     }
-    bool addOneShotTask(mtx_task_t func, uint32_t delayMs, MTXPriority priority = MTX_MEDIUM) {
-      return _addInternal(func, delayMs, priority, true);
+    bool addTaskMicros(mtx_task_t func, uint32_t intervalUs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
+      return _addInternal(func, intervalUs, priority, false, arg, true);
     }
+
+    bool addOneShotTask(mtx_task_t func, uint32_t delayMs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
+      return _addInternal(func, delayMs, priority, true, arg, false);
+    }
+
+    bool removeTask(mtx_task_t func) {
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
+        if (_tasks[i].taskFunction == func) {
+          _tasks[i].taskFunction = nullptr;
+          _tasks[i].isActive     = false;
+          MTX_PRINTLN(F("[MTX] Task removed."));
+          return true;
+        }
+      }
+      MTX_PRINTLN(F("[MTX] Warning: Task to remove not found."));
+      return false;
+    }
+
     bool pauseTask(mtx_task_t func) {
-      for (uint8_t i = 0; i < _taskCount; i++) {
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
         if (_tasks[i].taskFunction == func) {
           _tasks[i].isActive = false;
           return true;
@@ -108,21 +128,22 @@ class MicroTaskXKernel {
       }
       return false;
     }
+
     bool resumeTask(mtx_task_t func) {
-      for (uint8_t i = 0; i < _taskCount; i++) {
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
         if (_tasks[i].taskFunction == func) {
           _tasks[i].isActive = true;
-          _tasks[i].lastRun  = millis();
+          _tasks[i].lastRun  = _tasks[i].isMicros ? micros() : millis();
           return true;
         }
       }
       return false;
     }
 
-    bool setInterval(mtx_task_t func, uint32_t newIntervalMs) {
-      for (uint8_t i = 0; i < _taskCount; i++) {
+    bool setInterval(mtx_task_t func, uint32_t newInterval) {
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
         if (_tasks[i].taskFunction == func) {
-          _tasks[i].interval = newIntervalMs;
+          _tasks[i].interval = newInterval;
           return true;
         }
       }
@@ -130,40 +151,53 @@ class MicroTaskXKernel {
     }
 
     void runTasks() {
-      uint32_t currentMillis     = millis();
-      int      targetIndex       = -1;
-      int      highestPriority   = -1;
-      uint32_t minTimeToNextTask = 0xFFFFFFFF;
+      uint32_t currentMillis   = millis();
+      uint32_t currentMicros   = micros();
+      int      targetIndex     = -1;
+      int      highestPriority = -1;
+      uint32_t minTimeToNextMs = 0xFFFFFFFF;
+      bool     hasMicrosTasks  = false;
 
-      for (uint8_t i = 0; i < _taskCount; i++) {
-        if (_tasks[i].isActive) {
-          uint32_t timeElapsed = currentMillis - _tasks[i].lastRun;
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
+        if (_tasks[i].taskFunction != nullptr && _tasks[i].isActive) {
+          uint32_t now         = _tasks[i].isMicros ? currentMicros : currentMillis;
+          uint32_t timeElapsed = now - _tasks[i].lastRun;
+
+          if (_tasks[i].isMicros) hasMicrosTasks = true;
 
           if (timeElapsed >= _tasks[i].interval) {
-            if (static_cast<int>(_tasks[i].priority) > highestPriority) {
-              highestPriority = static_cast<int>(_tasks[i].priority);
+            int effectivePriority = static_cast<int>(_tasks[i].priority);
+            if (timeElapsed > (_tasks[i].interval * 2)) {
+              effectivePriority += 2;
+            }
+
+            if (effectivePriority > highestPriority) {
+              highestPriority = effectivePriority;
               targetIndex     = i;
             }
           } else {
-            uint32_t timeLeft = _tasks[i].interval - timeElapsed;
-            if (timeLeft < minTimeToNextTask) {
-              minTimeToNextTask = timeLeft;
+            if (!_tasks[i].isMicros) {
+              uint32_t timeLeft = _tasks[i].interval - timeElapsed;
+              if (timeLeft < minTimeToNextMs) {
+                minTimeToNextMs = timeLeft;
+              }
             }
           }
         }
       }
 
       if (targetIndex != -1) {
-        _tasks[targetIndex].taskFunction();
+        _tasks[targetIndex].taskFunction(_tasks[targetIndex].arg);
 
         if (_tasks[targetIndex].isOneShot) {
-          _tasks[targetIndex].isActive = false;
+          _tasks[targetIndex].taskFunction = nullptr;
+          _tasks[targetIndex].isActive     = false;
         } else {
-          _tasks[targetIndex].lastRun = millis();
+          _tasks[targetIndex].lastRun = _tasks[targetIndex].isMicros ? micros() : millis();
         }
       } else {
-        if (_smartSleepEnabled && minTimeToNextTask > 5) {
-          enterLowPowerSleep(minTimeToNextTask);
+        if (_smartSleepEnabled && !hasMicrosTasks && minTimeToNextMs > 5) {
+          enterLowPowerSleep(minTimeToNextMs);
         }
       }
     }
@@ -192,27 +226,34 @@ class MicroTaskXKernel {
     inline void benchTick() { _idleCounter++; }
 
   private:
-    bool _addInternal(mtx_task_t func, uint32_t intervalMs, MTXPriority priority, bool oneShot) {
-      for (uint8_t i = 0; i < _taskCount; i++) {
+    bool _addInternal(mtx_task_t func, uint32_t interval, MTXPriority priority, bool oneShot, void* arg, bool isMicros) {
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
         if (_tasks[i].taskFunction == func) {
-          _tasks[i].interval  = intervalMs;
+          _tasks[i].interval  = interval;
           _tasks[i].priority  = static_cast<uint8_t>(priority);
           _tasks[i].isOneShot = oneShot;
+          _tasks[i].arg       = arg;
+          _tasks[i].isMicros  = isMicros;
           _tasks[i].isActive  = true;
           return true;
         }
       }
 
-      if (_taskCount < MAX_TASKS) {
-        _tasks[_taskCount].taskFunction = func;
-        _tasks[_taskCount].interval     = intervalMs;
-        _tasks[_taskCount].lastRun      = millis();
-        _tasks[_taskCount].priority     = static_cast<uint8_t>(priority);
-        _tasks[_taskCount].isOneShot    = oneShot;
-        _tasks[_taskCount].isActive     = true;
-        _taskCount++;
-        return true;
+      for (uint8_t i = 0; i < MAX_TASKS; i++) {
+        if (_tasks[i].taskFunction == nullptr) {
+          _tasks[i].taskFunction = func;
+          _tasks[i].interval     = interval;
+          _tasks[i].lastRun      = isMicros ? micros() : millis();
+          _tasks[i].priority     = static_cast<uint8_t>(priority);
+          _tasks[i].isOneShot    = oneShot;
+          _tasks[i].arg          = arg;
+          _tasks[i].isMicros     = isMicros;
+          _tasks[i].isActive     = true;
+          return true;
+        }
       }
+
+      MTX_PRINTLN(F("[MTX] Error: Task List Full! Increase MAX_TASKS template parameter."));
       return false;
     }
 };

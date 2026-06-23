@@ -1,8 +1,8 @@
 {
   "name": "MicroTaskX",
-  "version": "3.0.0",
-  "description": "An ultra-lightweight, high-performance modular micro-RTOS and multitasking framework featuring a template-driven priority scheduler, runtime task controls, macro-driven non-blocking timers, smart power management, and real-time CPU profiling.",
-  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, non-blocking, timing, fast-adc, ema-filter, micro-rtos, modular, low-power, smart-sleep",
+  "version": "3.1.0",
+  "description": "An ultra-lightweight, high-performance modular micro-RTOS and multitasking framework featuring a template-driven priority scheduler, runtime task controls, macro-driven non-blocking timers, smart power management, real-time CPU profiling, and advanced control utilities.",
+  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, non-blocking, timing, fast-adc, ema-filter, micro-rtos, modular, low-power, smart-sleep, pid-control, lcd-optimization, circular-queue",
   "authors": [
     {
       "name": "Moaaz Yahia Shrif",
