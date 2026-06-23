@@ -1,3 +1,13 @@
 .clangd
 .grease-build
 compile_commands.json
+.DS_Store
+*.DS_Store
+node_modules/
+build/
+.vscode/
+.idea/
+*.o
+*.a
+*.so
+.pio/
