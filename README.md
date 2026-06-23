@@ -34,6 +34,7 @@ MicroTaskX/
 
 ## 🛠 Usage Example
 Here is a complete example demonstrating the new modular syntax, dynamic controls, and isolated analog smoothing:
+````
 
 ```cpp
 #include <MicroTaskX.h>
