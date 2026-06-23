@@ -1,16 +1,22 @@
 {
   "name": "MicroTaskX",
   "version": "3.1.1",
-  "description": "A modular micro-RTOS for Arduino with priority scheduling, task args, microsecond precision, WDT, ISR queuing, cooperative coroutines, inter-task signals and mutexes, real-time CPU profiling, smart sleep, PID with anti-windup, Kalman filter, software PWM, rotary encoder, EMA/moving-average smoothing, battery estimation, CRC8, LCD smart refresh, typewriter effect, and circular queue.",
-  "keywords": "multitasking, scheduler, task-manager, cpu-profiling, non-blocking, timing, fast-adc, ema-filter, micro-rtos, modular, low-power, smart-sleep, pid-control, kalman-filter, software-pwm, rotary-encoder, watchdog, isr-queuing, coroutines, mutexes, signals, crc8, battery-monitor, lcd-optimization, circular-queue",
+  "description": "A high-performance micro-RTOS and multitasking framework for Arduino, featuring independent macro timers, background task scheduling, and real-time CPU profiling.",
+  "keywords": ["multitasking", "scheduler", "task-manager", "cpu-profiling", "non-blocking", "timing", "fast-adc", "ema-filter", "micro-rtos", "modular", "low-power", "smart-sleep", "pid-control", "kalman-filter", "software-pwm", "rotary-encoder", "watchdog-timer", "isr-queuing", "coroutines", "signals", "mutexes"],
   "authors": [
     {
       "name": "Moaaz Yahia Shrif",
+      "email": "famile.sherif@gmail.com",
       "maintainer": true
     }
   ],
   "homepage": "https://github.com/Moaaz-i/MicroTaskX",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Moaaz-i/MicroTaskX.git"
+  },
   "frameworks": "arduino",
   "platforms": "*",
-  "examples": "examples/*/*.ino"
+  "examples": "examples/*/*.ino",
+  "license": "MIT"
 }
