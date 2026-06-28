@@ -29,6 +29,32 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Check and Extract Version
+        id: version_check
+        run: |
+          if [ -f "library.properties" ]; then
+            PROP_VERSION=$(grep -i '^version=' library.properties | cut -d= -f2 | xargs)
+          fi
+
+          if [ -f "library.json" ]; then
+            JSON_VERSION=$(jq -r '.version // empty' library.json 2>/dev/null || grep -o '"version": *"[^"]*"' library.json | cut -d'"' -f4)
+          fi
+
+          if [ ! -z "$PROP_VERSION" ] && [ ! -z "$JSON_VERSION" ]; then
+            if [ "$PROP_VERSION" != "$JSON_VERSION" ]; then
+              echo "Error: Version mismatch between library.properties ($PROP_VERSION) and library.json ($JSON_VERSION)"
+              exit 1
+            fi
+          fi
+
+          FINAL_VERSION="${PROP_VERSION:-$JSON_VERSION}"
+          if [ -z "$FINAL_VERSION" ]; then
+            echo "Error: Could not find version in library.properties or library.json"
+            exit 1
+          fi
+
+          echo "version=$FINAL_VERSION" >> $GITHUB_OUTPUT
+
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
@@ -104,6 +130,38 @@ jobs:
               console.log("Auto-merge triggered successfully.");
             } catch (error) {
               console.log("Auto-merge skipped or handled by system constraints:", error.message);
+            }
+
+      - name: Create Release and Tag
+        if: success() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ steps.version_check.outputs.version }}";
+            const tagName = `v${version}`;
+
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: tagName
+              });
+              console.log(`Release for ${tagName} already exists. Skipping creation.`);
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.repos.createRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tagName,
+                  name: `Release ${tagName}`,
+                  body: `Automated release for version ${version}`,
+                  draft: false,
+                  prerelease: false
+                });
+                console.log(`Successfully created release ${tagName}`);
+              } else {
+                throw error;
+              }
             }
 
   close-abandoned-prs:
