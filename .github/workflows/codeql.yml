@@ -25,10 +25,9 @@ jobs:
           languages: cpp
           source-root: src
 
-      - name: Manual build for Arduino library
-        run: |
-          mkdir build
-          g++ -c src/*.cpp -I src -o build/out.o
+      # Arduino libraries cannot be built with g++ or CodeQL autobuild
+      - name: Skip build step (Arduino library)
+        run: echo "Skipping build step for Arduino library"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
