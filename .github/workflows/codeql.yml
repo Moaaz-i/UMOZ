@@ -23,10 +23,12 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: cpp
+          source-root: src
 
-      # Disable autobuild because Arduino libraries do not use CMake/Make
-      - name: Manual build step (Arduino libraries don't need building)
-        run: echo "Skipping build step for Arduino library"
+      - name: Manual build for Arduino library
+        run: |
+          mkdir build
+          g++ -c src/*.cpp -I src -o build/out.o
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
