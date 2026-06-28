@@ -3,4 +3,16 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "sunday"
+      time: "09:00"
+      timezone: "Asia/Riyadh"
+
+    reviewers:
+      - "moaaz-i"
+
+    labels:
+      - "bot-update"
+      - "needs-review"
+
+    open-pull-requests-limit: 3
