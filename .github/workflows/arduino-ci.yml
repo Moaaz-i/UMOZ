@@ -21,6 +21,9 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install arduino:avr
 
+      - name: Install MicroTaskX library
+        run: arduino-cli lib install --zip-path .
+
       - name: Compile examples
         run: |
           for example in $(find ./examples -name "*.ino"); do
