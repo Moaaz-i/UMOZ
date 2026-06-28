@@ -64,7 +64,7 @@ jobs:
 
       - name: Create PR for Code Fixes
         if: github.event_name == 'push'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "style: automated code formatting and fixes"
