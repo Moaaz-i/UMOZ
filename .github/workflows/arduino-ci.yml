@@ -34,6 +34,8 @@ jobs:
       - name: Check and Extract Version
         id: version_check
         run: |
+          PROP_VERSION=""
+          JSON_VERSION=""
           if [ -f "library.properties" ]; then
             PROP_VERSION=$(grep -i '^version=' library.properties | cut -d= -f2 | xargs)
           fi
@@ -59,8 +61,8 @@ jobs:
 
       - name: Run Code Formatter (Clang Format)
         run: |
-          sudo apt-get install -y clang-format
-          find . -iname '*.h' -o -iname '*.cpp' -o -iname '*.ino' | xargs clang-format -i
+          sudo apt-get update && sudo apt-get install -y clang-format
+          find . -iname '*.h' -o -iname '*.cpp' -o -iname '*.ino' | xargs -r clang-format -i
 
       - name: Create PR for Code Fixes
         if: github.event_name == 'push'
