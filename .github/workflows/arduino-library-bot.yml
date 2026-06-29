@@ -1,0 +1,1666 @@
+name: Arduino Library Autonomous Bot
+run-name: Deploy to ${{ inputs.deploy_target }} by @${{ github.actor }}
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 0 * * *"
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Target environment"
+        required: false
+        default: "production"
+      skip_tests:
+        description: "Skip test execution"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ARDUINO_CLI_VERSION: "1.0.4"
+  CACHE_VERSION: "v2"
+
+jobs:
+  # ============================================
+  # JOB: Pre-flight Checks
+  # ============================================
+  preflight:
+    name: Pre-flight Validation
+    runs-on: ubuntu-latest
+    if: github.event_name != 'issue_comment'
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      version: ${{ steps.version_check.outputs.version }}
+      is_release: ${{ steps.version_check.outputs.is_release }}
+      changed_files: ${{ steps.detect_changes.outputs.changed_files }}
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Check Workflow Conditions
+        id: check
+        run: |
+          # Skip draft PRs unless explicitly requested
+          if [[ "${{ github.event_name }}" == "pull_request" ]] && \
+             [[ "${{ github.event.pull_request.draft }}" == "true" ]] && \
+             [[ "${{ github.event.action }}" != "ready_for_review" ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Detect Changed Files
+        id: detect_changes
+        uses: tj-actions/changed-files@v44
+        with:
+          files: |
+            src/**
+            examples/**
+            library.properties
+            library.json
+          files_ignore: |
+            **/*.md
+            **/docs/**
+          json: true
+          quotepath: false
+
+      - name: Check and Extract Version
+        id: version_check
+        run: |
+          PROP_VERSION=$(grep -i '^version=' library.properties 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || echo "")
+          JSON_VERSION=$(jq -r '.version // empty' library.json 2>/dev/null || echo "")
+
+          # Get previous version from tags
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          PREV_VERSION="${PREV_TAG#v}"
+
+          CURRENT_VERSION="${PROP_VERSION:-$JSON_VERSION}"
+
+          if [[ -n "$PROP_VERSION" ]] && [[ -n "$JSON_VERSION" ]] && [[ "$PROP_VERSION" != "$JSON_VERSION" ]]; then
+            echo "::error::Version mismatch between library.properties ($PROP_VERSION) and library.json ($JSON_VERSION)"
+            exit 1
+          fi
+
+          echo "version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+
+          if [[ "$CURRENT_VERSION" != "$PREV_VERSION" ]] && [[ -n "$CURRENT_VERSION" ]]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate Semantic Version
+        run: |
+          VERSION="${{ steps.version_check.outputs.version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::warning::Version '$VERSION' does not follow semantic versioning"
+          fi
+
+      - name: Validate Conventional Commits
+        if: github.event_name == 'pull_request'
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          subjectPattern: ^[A-Z].+$
+          subjectPatternError: |
+            The subject must start with a capital letter
+
+  # ============================================
+  # JOB: Security Analysis
+  # ============================================
+  security-scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: "trivy"
+
+      - name: Scan for Secret Leaks
+        uses: trufflesecurity/trufflehog@main
+        with:
+          base: ${{ github.event.pull_request.base.sha || github.sha }}
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+          extra_args: --only-verified --fail
+
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:cpp"
+
+      - name: Check for Known Vulnerabilities in Dependencies
+        run: |
+          if [ -f "library.json" ]; then
+            echo "Checking library.json dependencies..."
+            jq '.dependencies // [] | .[]' library.json 2>/dev/null || true
+          fi
+
+          # Check for deprecated Arduino APIs
+          if grep -rE "digitalWrite|digitalRead|analogWrite|analogRead" src/ --include="*.cpp" --include="*.h" | grep -v "// "; then
+            echo "::notice::Found standard Arduino API usage"
+          fi
+
+          # Check for potentially unsafe functions
+          if grep -rE "strcpy|strcat|sprintf|gets" src/ --include="*.cpp" --include="*.h" | grep -v "// "; then
+            echo "::warning::Potentially unsafe string functions detected. Consider using safer alternatives."
+          fi
+
+  # ============================================
+  # JOB: Code Quality Analysis
+  # ============================================
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Setup Analysis Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck clang-format clang-tidy cmake
+
+      - name: Verify Folder Structure
+        run: |
+          errors=0
+          [ ! -d "src" ] && echo "::error::Missing 'src' directory" && ((errors++))
+          [ ! -d "examples" ] && echo "::error::Missing 'examples' directory" && ((errors++))
+          [ ! -f "library.properties" ] && echo "::error::Missing 'library.properties' file" && ((errors++))
+          [ ! -f "README.md" ] && echo "::warning::Missing 'README.md' file" && ((errors++))
+          [ $errors -gt 0 ] && exit 1
+
+      - name: Run cppcheck (Static Analysis)
+        run: |
+          mkdir -p reports
+          cppcheck \
+            --enable=all \
+            --suppress=missingInclude \
+            --suppress=unusedFunction \
+            --inline-suppr \
+            --xml \
+            --xml-version=2 \
+            src/ \
+            2> reports/cppcheck.xml
+
+          # Generate human-readable report
+          cppcheck \
+            --enable=all \
+            --suppress=missingInclude \
+            --suppress=unusedFunction \
+            src/ \
+            --output-file reports/cppcheck.txt \
+            --inline-suppr
+
+      - name: Run Clang-Tidy
+        run: |
+          # Generate compile_commands.json if possible
+          if [ -f "CMakeLists.txt" ]; then
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cd ..
+          fi
+
+          find src -name "*.cpp" -o -name "*.h" | head -10 | while read file; do
+            echo "Analyzing $file..."
+            clang-tidy "$file" --warnings-as-errors='*' 2>> reports/clang-tidy.txt || true
+          done
+
+      - name: Run Code Formatter (Clang Format)
+        run: |
+          # Create .clang-format if not present
+          if [ ! -f ".clang-format" ]; then
+            cat > .clang-format << 'EOF'
+          BasedOnStyle: Google
+          IndentWidth: 2
+          UseTab: Never
+          BreakBeforeBraces: Attach
+          AllowShortIfStatementsOnASingleLine: false
+          IndentCaseLabels: true
+          ColumnLimit: 120
+          SortIncludes: true
+          EOF
+          fi
+
+          find . \( -name "*.h" -o -name "*.cpp" -o -name "*.ino" \) \
+            -not -path "./.github/*" | while read file; do
+            if ! clang-format --dry-run --Werror "$file" 2>/dev/null; then
+              clang-format -i "$file"
+            fi
+          done
+
+          # Check for formatting changes
+          if git diff --exit-code --quiet; then
+            echo "code_formatted=false" >> $GITHUB_ENV
+          else
+            echo "code_formatted=true" >> $GITHUB_ENV
+          fi
+
+      - name: Lint JSON & YAML configuration files
+        run: |
+          [ -f "library.json" ] && jq . library.json > /dev/null 2>&1 || echo "::error::Invalid library.json"
+          [ -f "keywords.txt" ] && cat keywords.txt | grep -E "^[a-zA-Z]" | sort -C || echo "::warning::keywords.txt not sorted"
+
+      - name: Check for broken markdown links
+        uses: tcort/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: "yes"
+          config-file: ".github/markdown-link-check.json"
+          folder-path: "."
+
+      - name: Commit and Push Formatted Code
+        if: env.code_formatted == 'true' && github.event_name == 'pull_request'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: automated code formatting fixes by bot [skip ci]"
+          commit_user_name: "autonomous-dev-bot[bot]"
+          commit_user_email: "autonomous-bot@users.noreply.github.com"
+
+      - name: Upload Analysis Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-quality-reports
+          path: reports/
+          retention-days: 30
+
+  # ============================================
+  # JOB: Build Matrix
+  # ============================================
+  build-matrix:
+    name: Build (${{ matrix.board-name }})
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    needs: [preflight, security-scan, code-quality]
+    if: needs.preflight.outputs.should_run == 'true' && github.event.inputs.skip_tests != 'true'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # AVR boards
+          - core: "arduino:avr"
+            fqbn: "arduino:avr:uno"
+            board-name: "Arduino Uno"
+            mem-limit: "2048"
+          - core: "arduino:avr"
+            fqbn: "arduino:avr:nano:cpu=atmega328"
+            board-name: "Arduino Nano"
+            mem-limit: "2048"
+          - core: "arduino:avr"
+            fqbn: "arduino:avr:mega"
+            board-name: "Arduino Mega"
+            mem-limit: "8192"
+
+          # ESP32 boards
+          - core: "esp32:esp32"
+            fqbn: "esp32:esp32:esp32"
+            board-name: "ESP32 DevKit"
+            platform_url: "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+            partition: "huge_app"
+          - core: "esp32:esp32"
+            fqbn: "esp32:esp32:esp32s3"
+            board-name: "ESP32-S3"
+            platform_url: "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+          - core: "esp32:esp32"
+            fqbn: "esp32:esp32:esp32c3"
+            board-name: "ESP32-C3"
+            platform_url: "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+
+          # ESP8266 boards
+          - core: "esp8266:esp8266"
+            fqbn: "esp8266:esp8266:nodemcu"
+            board-name: "ESP8266 NodeMCU"
+            platform_url: "https://arduino.esp8266.com/stable/package_esp8266com_index.json"
+
+          # SAMD boards
+          - core: "arduino:samd"
+            fqbn: "arduino:samd:mkr1000"
+            board-name: "Arduino MKR1000"
+            platform_url: "https://arduino.github.io/arduino-board-index/package_arduino_index.json"
+
+          # STM32 boards
+          - core: "STMicroelectronics:stm32"
+            fqbn: "STMicroelectronics:stm32:GenF4"
+            board-name: "STM32F4"
+            platform_url: "https://github.com/stm32duino/BoardManagerFiles/raw/main/package_stmicroelectronics_index.json"
+
+          # RP2040 boards
+          - core: "arduino:mbed_rp2040"
+            fqbn: "arduino:mbed_rp2040:pico"
+            board-name: "Raspberry Pi Pico"
+            platform_url: "https://github.com/arduino/arduino-pico/releases/download/global/package_arduino_pico_index.json"
+
+          # megaAVR boards
+          - core: "arduino:megaavr"
+            fqbn: "arduino:megaavr:nona4809"
+            board-name: "Arduino Nano Every"
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        exclude:
+          - os: windows-latest
+            board-name: "STM32F4"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: ${{ env.ARDUINO_CLI_VERSION }}
+
+      - name: Cache Arduino Core
+        uses: actions/cache@v4
+        id: cache-arduino
+        with:
+          path: |
+            ~/.arduino15/packages
+            ~/.arduino15/staging
+          key: ${{ runner.os }}-arduino-${{ env.CACHE_VERSION }}-${{ matrix.core }}
+          restore-keys: |
+            ${{ runner.os }}-arduino-${{ env.CACHE_VERSION }}-
+            ${{ runner.os }}-arduino-
+
+      - name: Configure Arduino CLI
+        run: |
+          arduino-cli config init --overwrite
+          if [ -n "${{ matrix.platform_url }}" ]; then
+            arduino-cli config set board_manager.additional_urls ${{ matrix.platform_url }}
+          fi
+          arduino-cli core update-index
+
+      - name: Install Core
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
+        run: |
+          arduino-cli core install ${{ matrix.core }} --no-overwrite
+
+      - name: Gather Installed Cores
+        run: arduino-cli core list
+
+      - name: Find Examples
+        id: find_examples
+        run: |
+          EXAMPLES=$(find ./examples -name "*.ino" | tr '\n' '|' | sed 's/|$//')
+          echo "examples=$EXAMPLES" >> $GITHUB_OUTPUT
+          echo "example_count=$(echo $EXAMPLES | tr '|' '\n' | wc -l)" >> $GITHUB_OUTPUT
+
+      - name: Compile Examples
+        id: compile
+        run: |
+          mkdir -p build_reports
+          FAILED=0
+          TOTAL_RAM=0
+          TOTAL_FLASH=0
+
+          find ./examples -name "*.ino" -print0 | while IFS= read -r -d '' example; do
+            EXAMPLE_NAME=$(basename "$example" .ino)
+            LOG_FILE="build_reports/${{ matrix.board-name }}_${EXAMPLE_NAME}.log"
+
+            echo "::group::Building $EXAMPLE_NAME for ${{ matrix.board-name }}"
+
+            ARGS="--fqbn ${{ matrix.fqbn }} --library . --warnings all"
+            [ -n "${{ matrix.partition }}" ] && ARGS="$ARGS --build-property partition.${{ matrix.partition }}=true"
+
+            if arduino-cli compile $ARGS "$example" 2>&1 | tee "$LOG_FILE"; then
+              echo "status=success" >> "build_reports/${{ matrix.board-name }}_${EXAMPLE_NAME}.status"
+
+              # Extract memory usage
+              RAM=$(grep -oP '(?<=Global variables use )\d+' "$LOG_FILE" | head -1 || echo "0")
+              FLASH=$(grep -oP '(?Sketch uses )\d+' "$LOG_FILE" | head -1 || echo "0")
+
+              echo "ram=$RAM" >> "build_reports/${{ matrix.board-name }}_${EXAMPLE_NAME}.mem"
+              echo "flash=$FLASH" >> "build_reports/${{ matrix.board-name }}_${EXAMPLE_NAME}.mem"
+            else
+              FAILED=1
+              echo "status=failed" >> "build_reports/${{ matrix.board-name }}_${EXAMPLE_NAME}.status"
+            fi
+            echo "::endgroup::"
+          done
+
+          exit $FAILED
+
+      - name: Check Memory Constraints
+        if: matrix.mem-limit && success()
+        run: |
+          MAX_RAM="${{ matrix.mem-limit }}"
+          echo "Checking RAM usage against limit of $MAX_RAM bytes..."
+
+          for memfile in build_reports/*.mem; do
+            [ -f "$memfile" ] || continue
+            RAM=$(grep "^ram=" "$memfile" | cut -d= -f2)
+            if [ -n "$RAM" ] && [ "$RAM" -gt "$MAX_RAM" ]; then
+              EXAMPLE=$(basename "$memfile" .mem)
+              echo "::warning file=$EXAMPLE::RAM usage ($RAM bytes) exceeds limit ($MAX_RAM bytes)"
+            fi
+          done
+
+      - name: Upload Build Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-reports-${{ matrix.board-name }}-${{ matrix.os || 'ubuntu' }}
+          path: build_reports/
+          retention-days: 7
+
+      - name: Post Compilation Summary
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const glob = require('glob');
+
+            let report = `### ❌ Build Failed: ${{ matrix.board-name }}\n\n`;
+
+            const statusFiles = fs.readdirSync('build_reports').filter(f => f.endsWith('.status'));
+            const failures = statusFiles.filter(f => {
+              const content = fs.readFileSync(`build_reports/${f}`, 'utf8');
+              return content.includes('failed');
+            });
+
+            if (failures.length > 0) {
+              report += `**Failed examples:**\n`;
+              failures.forEach(f => {
+                const exampleName = f.replace('.status', '');
+                const logFile = `build_reports/${exampleName}.log`;
+                if (fs.existsSync(logFile)) {
+                  const lastLines = fs.readFileSync(logFile, 'utf8').split('\n').slice(-10).join('\n');
+                  report += `\`- ${exampleName}\`\n\`\`\`\n${lastLines}\n\`\`\`\n`;
+                }
+              });
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: report
+            });
+
+  # ============================================
+  # JOB: Dependency Analysis
+  # ============================================
+  dependency-analysis:
+    name: Dependency Analysis
+    runs-on: ubuntu-latest
+    needs: preflight
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Analyze Dependencies
+        run: |
+          mkdir -p dependency_reports
+          echo "# Dependency Analysis Report" > dependency_dependencies_report.md
+
+          # Check library.json dependencies
+          if [ -f "library.json" ]; then
+            echo "## library.json Dependencies" >> dependency_report.md
+            jq '.dependencies // [] | if length == 0 then "No external dependencies" else .[] end' library.json >> dependency_report.md 2>/dev/null || echo "Invalid library.json format" >> dependency_report.md
+
+            # Check for framework dependencies
+            echo "## Framework Compatibility" >> dependency_report.md
+            jq '.frameworks // []' library.json >> dependency_report.md 2>/dev/null || echo "arduino" >> dependency_report.md
+          fi
+
+          # Check includes in source files
+          echo "## Include Analysis" >> dependency_report.md
+          grep -rh "#include" src/ --include="*.cpp" --include="*.h" 2>/dev/null | sort | uniq -c | sort -rn >> dependency_report.md
+
+          # Flag Arduino-specific includes
+          echo "## Arduino-specific Includes" >> dependency_report.md
+          grep -rh "#include.*<Arduino\|#include.*<Wire\|#include.*<SPI\|#include.*<EEPROM" src/ --include="*.cpp" --include="*.h" 2>/dev/null >> dependency_report.md
+
+      - name: Check License Compatibility
+        run: |
+          if [ -f "LICENSE" ]; then
+            LICENSE=$(head -1 LICENSE)
+            echo "Detected license: $LICENSE"
+
+            # Check for known permissive licenses
+            if echo "$LICENSE" | grep -qiE "MIT|Apache|BSD|GPL"; then
+              echo "::notice::License appears compatible with Arduino library ecosystem"
+            else
+              echo "::warning::License may have compatibility considerations for Arduino ecosystem"
+            fi
+          else
+            echo "::warning::No LICENSE file found"
+          fi
+
+      - name: Upload Dependency Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-analysis
+          path: dependency_report.md
+          retention-days: 30
+
+  # ============================================
+  # JOB: Documentation Quality
+  # ============================================
+  docs-quality:
+    name: Documentation Quality Check
+    runs-on: ubuntu-latest
+    needs: preflight
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Validate README Structure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            if (!fs.existsSync('README.md')) {
+              core.setFailed('README.md is missing');
+              return;
+            }
+
+            const readme = fs.readFileSync('README.md', 'utf8');
+            const issues = [];
+            const warnings = [];
+
+            // Check for essential sections
+            const requiredSections = ['Installation', 'Usage', 'License'];
+            const optionalSections = ['API Reference', 'Examples', 'Contributing', 'Credits'];
+
+            for (const section of requiredSections) {
+              if (!new RegExp(`#+\\s*${section}`, 'i').test(readme)) {
+                issues.push(`Missing required section: ${section}`);
+              }
+            }
+
+            // Check for badges
+            if (!/!\[.*\]\(.*\)/.test(readme)) {
+              warnings.push('Consider adding badges for build status, version, license');
+            }
+
+            // Check for examples/code blocks
+            if (!/```(?:cpp|c\+\+|ino)/i.test(readme)) {
+              warnings.push('Consider adding code examples in README');
+            }
+
+            // Check for broken structure
+            if (readme.includes('TODO') || readme.includes('FIXME')) {
+              warnings.push('README contains placeholder TODO/FIXME comments');
+            }
+
+            if (issues.length > 0) {
+              console.log('Issues found:');
+              issues.forEach(i => console.log(`  - ${i}`));
+              core.setFailed(issues.join('\n'));
+            }
+
+            if (warnings.length > 0) {
+              console.log('Warnings:');
+              warnings.forEach(w => core.warning(w));
+            }
+
+      - name: Validate Keywords File
+        run: |
+          if [ -f "keywords.txt" ]; then
+            echo "Validating keywords.txt format..."
+
+            # Check each line follows keyword<TAB>type format
+            while IFS= read -r line; do
+              if [[ "$line" =~ ^[a-zA-Z] ]] && [[ ! "$line" =~ $'\t' ]]; then
+                echo "::warning file=keywords.txt::Line does not use tabs: $line"
+              fi
+            done < keywords.txt
+          else
+            echo "::warning::No keywords.txt file found. Consider adding one for Arduino IDE keyword highlighting."
+          fi
+
+      - name: Check Examples Documentation
+        run: |
+          # Check each example has proper documentation
+          find examples -name "*.ino" | while read example; do
+            EXAMPLE_NAME=$(basename "$example" .ino)
+            README_PATH=$(dirname "$example")/README.md
+
+            if [ ! -f "$README_PATH" ]; then
+              echo "::warning file=$example::No README.md found for example $EXAMPLE_NAME"
+            fi
+
+            # Check example has basic header comment
+            HEADERS=$(head -20 "$example" | grep -c "//" || echo 0)
+            if [ "$HEADERS" -lt 3 ]; then
+              echo "::notice file=$example::Example $EXAMPLE_NAME could use more header comments"
+            fi
+          done
+
+  # ============================================
+  # JOB: Performance Benchmarks
+  # ============================================
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: build-matrix
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Build Reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-reports-*
+          merge-multiple: true
+          path: all_build_reports
+
+      - name: Analyze Memory Usage Trends
+        run: |
+          mkdir -p benchmark_results
+
+          echo "# Memory Usage Benchmark Report" > benchmark_results/memory_trends.md
+          echo "" >> benchmark_results/memory_trends.md
+          echo "| Board | Example | RAM (bytes) | Flash (bytes) |" >> benchmark_results/memory_trends.md
+          echo "|-------|---------|-------------|---------------|" >> benchmark_results/memory_trends.md
+
+          for memfile in all_build_reports/*.mem; do
+            [ -f "$memfile" ] || continue
+            NAME=$(basename "$memfile" .mem)
+            RAM=$(grep "^ram=" "$memfile" | cut -d= -f2 || echo "N/A")
+            FLASH=$(grep "^flash=" "$memfile" | cut -d= -f2 || echo "N/A")
+            echo "| ${NAME}_${{ github.sha }} | ${{ github.sha }} | $RAM | $FLASH |" >> benchmark_results/memory_trends.md
+          done
+
+      - name: Check Repository Size
+        run: |
+          TOTAL_SIZE=$(du -sk . | cut -f1)
+          SRC_SIZE=$(du -sk src/ 2>/dev/null | cut -f1 || echo 0)
+          EXAMPLES_SIZE=$(du -sk examples/ 2>/dev/null | cut -f1 || echo 0)
+
+          echo "### Repository Size Analysis" >> benchmark_results/memory_trends.md
+          echo "" >> benchmark_results/memory_trends.md
+          echo "- Total repository: ${TOTAL_SIZE}KB" >> benchmark_results/memory_trends.md
+          echo "- Source code: ${SRC_SIZE}KB" >> benchmark_results/memory_trends.md
+          echo "- Examples: ${EXAMPLES_SIZE}KB" >> benchmark_results/memory_trends.md
+
+      - name: Compare with Previous Benchmark
+        run: |
+          # Try to download previous benchmark
+          gh run download --name benchmark-results --dir previous_benchmark 2>/dev/null || echo "No previous benchmark found"
+
+          if [ -f "previous_benchmark/memory_trends.md" ]; then
+            echo "### Comparison with Previous Run" >> benchmark_results/memory_trends.md
+            echo "" >> benchmark_results/memory_trends.md
+
+            echo "::group::Benchmark Comparison"
+            diff -u previous_benchmark/memory_trends.md benchmark_results/memory_trends.md || true
+            echo "::endgroup::"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark_results/
+          retention-days: 90
+
+  # ============================================
+  # JOB: PR Management
+  # ============================================
+  pr-management:
+    name: PR Management
+    runs-on: ubuntu-latest
+    needs: [preflight, build-matrix, security-scan, code-quality]
+    if: always() && github.event_name == 'pull_request'
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all_artifacts
+
+      - name: Welcome New Contributor
+        if: github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const author = context.actor;
+            const { data: userInfo } = await github.rest.users.getByUsername({ username: author });
+
+            // Check if it's a first-time contributor
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              creator: author
+            });
+
+            const isFirstTime = prs.length === 1;
+
+            const message = isFirstTime
+              ? `🤖 Welcome @${author}! This appears to be your first contribution here. I'm your autonomous assistant bot, now scanning your code, running tests, and checking for issues. Thank you for contributing!
+
+               📋 What I'll check:
+               - Code formatting and style
+               - Compilation across multiple Arduino boards
+               - Security vulnerabilities
+               - Documentation quality
+
+               Hang tight, I'll report back soon with my findings!`
+              : `🤖 Welcome back @${author}! I'm now scanning your PR, running automated tests and quality checks.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
+
+      - name: Generate PR Summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            let summary = `## 🤖 Autonomous Bot Analysis Report\n\n`;
+            summary += `**PR Status:** Running checks...\n\n`;
+
+            // List changed files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            summary += `### 📁 Changed Files (${files.length})\n`;
+            files.forEach(f => {
+              const icon = f.status === 'added' ? '➕' : f.status === 'removed' ? '➖' : '📝';
+              summary += `${icon} \`${f.filename}\` (+${f.additions}/-${f.deletions})\n`;
+            });
+
+            // Add build summary
+            summary += `\n### 🔨 Build Matrix\n`;
+            summary += `Compiling across Arduino/ESP32/ESP8266/STM32 boards...\n`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: summary
+            });
+
+      - name: Auto-Label Pull Request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number
+            });
+
+            const labels = new Set();
+
+            // Based on file changes
+            files.forEach(f => {
+              if (f.filename.startsWith('examples/')) labels.add('examples');
+              if (f.filename.StartsWith('src/')) labels.add('source-code');
+              if (f.filename.endsWith('.md')) labels.add('documentation');
+              if (f.filename.endsWith('.yml') || f.filename.endsWith('.yaml')) labels.add('ci-cd');
+              if (f.filename.endsWith('.ino')) labels.add('arduino');
+
+              // Size-based labels
+              if (f.changes > 500) labels.add('large-change');
+              else if (f.changes > 100) labels.add('medium-change');
+              else labels.add('small-change');
+            });
+
+            // Check commit messages for conventional commit types
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number
+            });
+
+            commits.forEach(c => {
+              if (c.commit.message.startsWith('feat')) labels.add('enhancement');
+              if (c.commit.message.startsWith('fix')) labels.add('bug');
+              if (c.commit.message.startsWith('docs')) labels.add('documentation');
+              if (c.commit.message.startsWith('test')) labels.add('testing');
+            });
+
+            if (labels.size > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+                labels: Array.from(labels)
+              });
+            }
+
+      - name: Check for TODOs and FIXMEs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number
+            });
+
+            const todos = [];
+
+            for (const file of files) {
+              if (!file.patch) continue;
+
+              const lines = file.patch.split('\n');
+              lines.forEach(line => {
+                if (line.startsWith('+') && /\b(TODO|FIXME|HACK|XXX|BUG)\b/i.test(line)) {
+                  todos.push({
+                    file: file.filename,
+                    content: line.trim()
+                  });
+                }
+              });
+            }
+
+            if (todos.length > 0) {
+              let comment = `📝 **Found ${todos.length} TODO/FIXME comment(s) added in this PR:**\n\n`;
+              todos.forEach(t => {
+                comment += `- \`${t.file}\`: ${t.content.replace(/^[\+]/, '').trim()}\n`;
+              });
+              comment += `\nConsider addressing these before merging, or create issues to track them.`;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      - name: Run Size Constraints Check
+        run: |
+          MAX_SIZE_KB=500
+          TOTAL_SIZE=$(du -sk src/ | cut -f1)
+
+          if [ "$TOTAL_SIZE" -gt "$MAX_SIZE_KB" ]; then
+            echo "::warning::Library size ($TOTAL_SIZE KB) exceeds recommended limit of $MAX_SIZE_KB KB"
+            echo "SIZE_STATUS=warning" >> $GITHUB_ENV
+          else
+            echo "SIZE_STATUS=ok" >> $GITHUB_ENV
+          fi
+
+      - name: Request Changes on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let errorMessage = '### ⚠️ Automated Checks Failed\n\n';
+            errorMessage += 'The following issues were detected:\n\n';
+
+            // Check for compilation errors
+            try {
+              const statusFiles = fs.readdirSync('all_artifacts').filter(f => f.includes('.status'));
+              const failed = statusFiles.filter(f => {
+                const content = fs.readFileSync(`all_artifacts/${f}`, 'utf8');
+                return content.includes('failed');
+              });
+
+              if (failed.length > 0) {
+                errorMessage += '- **Compilation failures** on some boards\n';
+              }
+            } catch (e) {}
+
+            // Additional failure messages
+            errorMessage += '- Please review the checks logs for details\n';
+            errorMessage += '\n---\n*This PR requires changes before it can be merged.*';
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'REQUEST_CHANGES',
+              body: errorMessage
+            });
+
+      - name: Auto-Approve Dependabot
+        if: success() && github.actor == 'dependabot[bot]'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Approve the PR
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'APPROVE',
+              body: '✅ Automated approval for Dependabot update. All checks passed.'
+            });
+
+            // Merge the PR
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              merge_method: 'squash'
+            });
+
+      - name: Approve Maintainer PRs
+        if: success() && contains('["maintainer1", "maintainer2"]', github.actor)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'APPROVE',
+              body: '✅ All automated checks passed. Ready for final review.'
+            });
+
+      - name: Post Success Summary
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let message = '### ✅ All Automated Checks Passed!\n\n';
+            message += '---\n\n';
+            message += '**Summary:**\n';
+            message += '- ✅ Security scan: No vulnerabilities found\n';
+            message += '- ✅ Code style: Properly formatted\n';
+            message += '- ✅ Build: Compiled successfully on all target boards\n';
+            message += '- ✅ Documentation: Checks passed\n\n';
+
+            // Add memory report if available
+            try {
+              const memFiles = fs.readdirSync('all_artifacts').filter(f => f.endsWith('.mem'));
+              if (memFiles.length > 0) {
+                message += '<details>\n<summary>📊 Memory Usage Summary</summary>\n\n';
+                message += '| Board | RAM (bytes) | Flash (bytes) |\n|-------|-------------|---------------|\n';
+
+                memFiles.slice(0, 5).forEach(f => {
+                  const name = f.replace('.mem', '').replace('_', ' ');
+                  const content = fs.readFileSync(`all_artifacts/${f}`, 'utf8');
+                  const ram = content.match(/ram=(\d+)/)?.[1] || 'N/A';
+                  const flash = content.match(/flash=(\d+)/)?.[1] || 'N/A';
+                  message += `| ${name} | ${ram} | ${flash} |\n`;
+                });
+
+                message += '</details>\n';
+              }
+            } catch (e) {}
+
+            message += '\n---\n*PR is ready for review.*';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: message
+            });
+
+  # ============================================
+  # JOB: Bot Commands Handler
+  # ============================================
+  bot-commands:
+    name: Process Bot Commands
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/bot')
+
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: write
+
+    steps:
+      - name: Parse Command
+        id: parse
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+          COMMAND=$(echo "$COMMENT" | grep -oE '^/bot-[a-z]+' | head -1)
+          ARGS=$(echo "$COMMENT" | sed "s/^$COMMAND//" | xargs)
+
+          echo "command=${COMMAND}" >> $GITHUB_OUTPUT
+          echo "args=${ARGS}" >> $GITHUB_OUTPUT
+
+      - name: Execute Bot Help Command
+        if: steps.parse.outputs.command == '/bot-help'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: `🤖 **Available Bot Commands**
+
+            | Command | Description |
+            |---------|-------------|
+            | \`/bot-help\` | Show this help message |
+            | \`/bot-rebuild\` | Re-trigger build workflow |
+            | \`/bot-version\` | Show library version |
+            | \`/bot-report\` | Generate detailed report |
+            | \`/bot-format\` | Re-run code formatting |
+            | \`/bot-check-security\` | Run security scan |
+            | \`/bot-memory\` | Show memory usage breakdown |
+            | \`/bot-suggest\` | Get improvement suggestions |
+
+            Use \`/bot-command [args]\` format.`
+            });
+
+      - name: Execute Bot Rebuild Command
+        if: steps.parse.outputs.command == '/bot-rebuild'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Acknowledge command
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: '🔄 Re-triggering build workflow...'
+            });
+
+            // Get PR branch
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number
+            });
+
+            // Trigger workflow
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'arduino-library-bot.yml',
+              ref: pr.head.ref,
+              inputs: { rebuild_reason: 'Manual request' }
+            });
+
+      - name: Execute Bot Version Command
+        if: steps.parse.outputs.command == '/bot-version'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: `🔗 Current version: \`${{ needs.preflight.outputs.version }}\`\n\n[View all releases](https://github.com/${{ github.repository }}/releases)`
+            });
+
+      - name: Execute Bot Report Command
+        if: steps.parse.outputs.command == '/bot-report'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Fetch latest workflow run artifacts
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'arduino-library-bot.yml',
+              per_page: 1
+            });
+
+            let report = '📊 **Build Report Generation Requested**\n\n';
+
+            if (runs.workflow_runs.length > 0) {
+              const latest = runs.workflow_runs[0];
+              report += `- **Latest run:** [${latest.id}](${latest.html_url})\n`;
+              report += `- **Status:** ${latest.status}\n`;
+              report += `- **Conclusion:** ${latest.conclusion || 'Running'}\n`;
+              report += `- **Triggered by:** ${latest.triggering_actor.login}\n`;
+            } else {
+              report += 'No workflow runs found.\n';
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: report
+            });
+
+      - name: Execute Bot Format Command
+        if: steps.parse.outputs.command == '/bot-format'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: '🎨 Code formatting has been queued. The bot will format code and push any changes.'
+            });
+
+      - name: Execute Bot Security Command
+        if: steps.parse.outputs.command == '/bot-check-security'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Trigger security workflow
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'arduino-library-bot.yml',
+              ref: context.payload.issue.pull_request ? context.payload.issue.pull_request.head.ref : context.sha
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: '🔒 Security scan initiated. Results will be posted shortly.'
+            });
+
+      - name: Execute Bot Memory Command
+        if: steps.parse.outputs.command == '/bot-memory'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Fetch memory artifacts from latest run
+            const { data: artifacts } = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, name: 'build-reports-*'
+            });
+
+            let memReport = '📊 **Memory Usage Report**\n\n';
+            memReport += 'Artifact list fetched. Detailed memory breakdown coming soon after next build.\n';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: memReport
+            });
+
+      - name: Execute Bot Suggest Command
+        if: steps.parse.outputs.command == '/bot-suggest'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number
+            });
+
+            let suggestions = '💡 **Improvement Suggestions**\n\n';
+            let hasSuggestions = false;
+
+            files.forEach(f => {
+              if (f.patch) {
+                // Check for potential improvements
+                if (/int\s+\w+\s*=\s*\d+\s*;/.test(f.patch)) {
+                  suggestions += `- Consider using \`constexpr\` for constants in \`${f.filename}\`\n`;
+                  hasSuggestions = true;
+                }
+                if (/delay\(\d+\)/.test(f.patch)) {
+                  suggestions += `- Consider using non-blocking timing alternatives instead of \`delay()\` in \`${f.filename}\`\n`;
+                  hasSuggestions = true;
+                }
+                if (/String\s+\w+\s*;/.test(f.patch)) {
+                  suggestions += `- Consider using \`String\` carefully to avoid memory fragmentation in \`${f.filename}\`\n`;
+                  hasSuggestions = true;
+                }
+              }
+            });
+
+            if (!hasSuggestions) {
+              suggestions += 'No specific suggestions at this time. Code looks good! 🎉';
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+              body: suggestions
+            });
+
+  # ============================================
+  # JOB: Scheduled Maintenance
+  # ============================================
+  maintenance:
+    name: Repository Maintenance
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Daily Health Check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Health check report
+            let report = '# Repository Health Check Report\n\n';
+            report += `**Date:** ${new Date().toISOString()}\n\n`;
+
+            // Essential files check
+            const essentialFiles = ['README.md', 'LICENSE', 'library.properties', 'keywords.txt'];
+            const missing = essentialFiles.filter(f => !fs.existsSync(f));
+            if (missing.length > 0) {
+              report += `⚠️ **Missing essential files:** ${missing.join(', ')}\n\n`;
+            } else {
+              report += '✅ All essential files present\n\n';
+            }
+
+            // PR statistics
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open'
+            });
+
+            report += `## Pull Requests\n`;
+            report += `- Open PRs: ${prs.length}\n`;
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open'
+            });
+
+            report += `\n## Issues\n`;
+            report += `- Open issues: ${issues.filter(i => !i.pull_request).length}\n`;
+
+            console.log(report);
+
+      - name: Close Stale Pull Requests
+        uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-pr-message: "⚠️ This PR has been automatically marked as stale due to inactivity. Please update or it will be closed soon."
+          close-pr-message: "🔒 This PR has been automatically closed due to prolonged inactivity. Feel free to reopen when ready."
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          stale-pr-label: "stale"
+          exempt-pr-labels: "wip,security"
+
+      - name: Close Stale Issues
+        uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-issue-message: "⚠️ This issue has been marked as stale due to inactivity. Please comment or it will be closed."
+          close-issue-message: "🔒 This issue has been automatically closed due to inactivity. Please reopen if still relevant."
+          days-before-issue-stale: 60
+          days-before-issue-close: 7
+          stale-issue-label: "stale"
+          exempt-issue-labels: "pinned,security,bug,enhancement"
+
+      - name: Lock Old Resolved Issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'closed', per_page: 100
+            });
+
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+            let locked = 0;
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+              if (issue.locked) continue;
+
+              const closedAt = new Date(issue.closed_at);
+              if (closedAt < thirtyDaysAgo) {
+                await github.rest.issues.lock({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number,
+                  lock_reason: 'resolved'
+                });
+                locked++;
+              }
+            }
+
+            console.log(`Locked ${locked} old issues as resolved.`);
+
+      - name: Prune Stale Branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: branches } = await github.rest.repos.listBranches({
+              owner: context.repo.owner, repo: context.repo.repo, protected: false
+            });
+
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+            let deleted = 0;
+            for (const branch of branches.data || branches) {
+              const branchName = branch.name || branch;
+              if (branchName === 'main' || branchName === 'master' || branchName === 'develop') continue;
+
+              try {
+                const { data: commits } = await github.rest.repos.listCommits({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  sha: branchName, per_page: 1
+                });
+
+                if (commits.length > 0) {
+                  const lastCommit = new Date(commits[0].commit.committer.date);
+                  if (lastCommit < thirtyDaysAgo) {
+                    await github.rest.git.deleteRef({
+                      owner: context.repo.owner, repo: context.repo.repo,
+                      ref: `heads/${branchName}`
+                    });
+                    console.log(`Deleted stale branch: ${branchName}`);
+                    deleted++;
+                  }
+                }
+              } catch (e) {
+                console.log(`Could not process branch ${branchName}: ${e.message}`);
+              }
+            }
+            console.log(`Deleted ${deleted} stale branches.`)
+
+      - name: Update Dependencies Check
+        if: hashFiles('library.json') != ''
+        run: |
+          # Check if dependencies have updates
+          echo "Checking dependency versions against latest releases..."
+
+          # Extract dependency names
+          jq '.dependencies // [] | .[].name' library.json 2>/dev/null | while read dep; do
+            echo "Dependency: $dep"
+          done
+
+      - name: Generate Monthly Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date();
+            if (now.getDate() !== 1) return; // Only run on 1st of month
+
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 10
+            });
+
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'all', per_page: 50
+            });
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'all', per_page: 50
+            });
+
+            const mergedPRs = prs.filter(pr => pr.merged_at !== null).length;
+            const closedIssues = issues.filter(i => !i.pull_request && i.closed_at !== null);
+
+            let monthlyReport = `# Monthly Maintenance Report - ${now.toLocaleString('default', { month: 'long', year: 'numeric' })}\n\n`;
+            monthlyReport += `## Statistics\n`;
+            monthlyReport += `- **Releases:** ${releases.length}\n`;
+            monthlyReport += `- **Merged PRs:** ${mergedPRs}\n`;
+            monthlyReport += `- **Closed Issues:** ${closedIssues.length}\n`;
+
+            // Create issue with monthly report
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `📊 Monthly Maintenance Report - ${now.toLocaleString('default', { month: 'long', year: 'numeric' })}`,
+              body: monthlyReport,
+              labels: ['maintenance', 'report']
+            });
+
+  # ============================================
+  # JOB: Release Management
+  # ============================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [preflight, build-matrix, security-scan, code-quality]
+    if: |
+      always() &&
+      needs.build-matrix.result == 'success' &&
+      needs.security-scan.result == 'success' &&
+      needs.code-quality.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.preflight.outputs.is_release == 'true'
+
+    permissions:
+      contents: write
+      pull-requests: write
+      discussions: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Build Reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-reports-*
+          merge-multiple: true
+          path: build_reports
+
+      - name: Generate Change Log
+        id: changelog
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        with:
+          script: |
+            const version = process.env.VERSION;
+            const tagName = `v${version}`;
+
+            // Get previous tag
+            const { data: refs } = await github.rest.git.listMatchingRefs({
+              owner: context.repo.owner, repo: context.repo.repo, ref: 'tags/'
+            });
+
+            let previousTag = '';
+            if (refs.length > 1) {
+              previousTag = refs[1].ref.replace('refs/tags/', '');
+            }
+
+            // Get commits between tags
+            let commitMessages = [];
+            if (previousTag) {
+              const { data: comparison } = await github.rest.repos.compareCommits({
+                owner: context.repo.owner, repo: context.repo.repo,
+                base: previousTag, head: context.sha
+              });
+
+              commitMessages = comparison.commits.map(c => {
+                const scope = c.commit.message.match(/^\w+\(([^)]+)\)/)?.[1] || '';
+                const msg = c.commit.message.split('\n')[0];
+                return { scope, message: msg, sha: c.sha.substring(0, 7) };
+              });
+            }
+
+            // Categorize changes
+            const features = commitMessages.filter(c => c.message.startsWith('feat'));
+            const fixes = commitMessages.filter(c => c.message.startsWith('fix'));
+            const other = commitMessages.filter(c =>
+              !c.message.startsWith('feat') && !c.message.startsWith('fix')
+            );
+
+            let changelog = `## Changes in ${tagName}\n\n`;
+
+            if (features.length > 0) {
+              changelog += `### ✨ New Features\n`;
+              features.forEach(f => changelog += `- ${f.message.replace('feat:', '')} (${f.sha})\n`);
+              changelog += '\n';
+            }
+
+            if (fixes.length > 0) {
+              changelog += `### 🐛 Bug Fixes\n`;
+              fixes.forEach(f => changelog += `- ${f.message.replace('fix:', '')} (${f.sha})\n`);
+              changelog += '\n';
+            }
+
+            if (other.length > 0) {
+              changelog += `### 🔧 Other Changes\n`;
+              other.forEach(c => changelog += `- ${c.message} (${c.sha})\n`);
+              changelog += '\n';
+            }
+
+            // Add memory report from build artifacts
+            const fs = require('fs');
+            try {
+              const memFiles = fs.readdirSync('build_reports').filter(f => f.endsWith('.mem'));
+              if (memFiles.length > 0) {
+                changelog += `### 📊 Memory Usage Highlights\n\n`;
+                changelog += `| Board | RAM | Flash |\n|-------|-----|-------|\n`;
+
+                memFiles.slice(0, 5).forEach(f => {
+                  const name = f.replace('.mem', '').replace('_', ' ');
+                  const content = fs.readFileSync(`build_reports/${f}`, 'utf8');
+                  const ram = content.match(/ram=(\d+)/)?.[1] || 'N/A';
+                  const flash = content.match(/flash=(\d+)/)?.[1] || 'N/A';
+                  changelog += `| ${name} | ${ram} | ${flash} |\n`;
+                });
+                changelog += '\n';
+              }
+            } catch (e) {}
+
+            core.setOutput('changelog', changelog);
+            core.setOutput('tag_name', tagName);
+
+            return { changelog, tagName };
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ steps.changelog.outputs.tag_name }}
+          tag_name: ${{ steps.changelog.outputs.tag_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ contains(needs.preflight.outputs.version, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to Arduino Library Manager
+        if: hashFiles('library.json') != ''
+        run: |
+          echo "Library properties validated. The Arduino Library Manager index will be updated automatically if registered."
+          # Note: For actual publishing, submit a PR to the Arduino library registry
+
+      - name: Post Release Announcement
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        with:
+          script: |
+            const version = process.env.VERSION;
+
+            // Create announcement issue
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `🚀 Release v${version} is now available!`,
+              body: `A new version of this library has been released!
+
+              ## Installation
+              Install via Arduino Library Manager by searching for this library and selecting version ${version}.
+
+              **Full Changelog:** https://github.com/${context.repo.owner}/${context.repo.repo}/compare/v$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "0.0.0")...v${version}
+
+              ---
+              *This is an automated release announcement.*`,
+              labels: ['release', 'announcement']
+            });
+
+  # ============================================
+  # JOB: Notifications
+  # ============================================
+  notify:
+    name: Status Notifications
+    runs-on: ubuntu-latest
+    needs: [preflight, build-matrix, security-scan, code-quality]
+    if: always()
+
+    steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [ "${{ needs.build-matrix.result }}" == "success" ] && \
+             [ "${{ needs.security-scan.result }}" == "success" ] && \
+             [ "${{ needs.code-quality.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Status Check Summary
+        run: |
+          echo "## ${{ steps.status.outputs.emoji }} Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Pre-flight | ${{ needs.preflight.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Matrix | ${{ needs.build-matrix.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security-scan.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,21 @@
+{
+  "replacementPatterns": [
+    {
+      "pattern": "^/",
+      "replacement": "{{BASEURL}}/"
+    }
+  ],
+  "aliveStatusCodes": [200, 206],
+  "ignorePatterns": [
+    {
+      "pattern": "^https://github.com/"
+    },
+    {
+      "pattern": "^https://arduino.github.io/"
+    }
+  ],
+  "retryOnFail": true,
+  "retryCount": 3,
+  "fallbackRetryDelay": "30s",
+  "timeout": "20s"
+}
