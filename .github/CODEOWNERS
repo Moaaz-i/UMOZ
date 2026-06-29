@@ -1,0 +1,25 @@
+# CODEOWNERS - Define code ownership for this repository
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @your-github-username @your-org/maintainers
+
+# Library core source code
+/src/ @your-github-username @core-contributors
+
+# Examples
+/examples/ @your-github-username @example-contributors
+
+# Documentation
+/README.md @your-org/docs-team
+/docs/ @your-org/docs-team
+
+# CI/CD configuration
+/.github/workflows/ @your-github-username @ci-team
+
+# Build configuration
+library.properties @your-github-username
+library.json @your-github-username
+
+# Security-related files
+SECURITY.md @your-github-username @your-org/security-team
