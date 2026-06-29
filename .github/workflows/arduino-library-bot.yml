@@ -14,18 +14,18 @@ on:
   workflow_dispatch:
     inputs:
       deploy_target:
-        description: "Target environment"
+        description: 'Target environment'
         required: false
-        default: "production"
+        default: 'production'
       skip_tests:
-        description: "Skip test execution"
+        description: 'Skip test execution'
         required: false
-        default: false
+        default: 'false'
         type: boolean
 
 env:
-  ARDUINO_CLI_VERSION: "1.0.4"
-  CACHE_VERSION: "v2"
+  ARDUINO_CLI_VERSION: '1.0.4'
+  CACHE_VERSION: 'v2'
 
 jobs:
   # ============================================
@@ -157,17 +157,17 @@ jobs:
       - name: Run Trivy Vulnerability Scanner
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: "fs"
-          scan-ref: "."
-          format: "sarif"
-          output: "trivy-results.sarif"
-          severity: "CRITICAL,HIGH"
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+         severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: "trivy-results.sarif"
-          category: "trivy"
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
 
       - name: Scan for Secret Leaks
         uses: trufflesecurity/trufflehog@main
@@ -311,8 +311,8 @@ jobs:
         uses: tcort/github-action-markdown-link-check@v1
         with:
           use-quiet-mode: "yes"
-          config-file: ".github/markdown-link-check.json"
-          folder-path: "."
+          config-file: '.github/markdown-link-check.json'
+          folder-path: '.'
 
       - name: Commit and Push Formatted Code
         if: env.code_formatted == 'true' && github.event_name == 'pull_request'
@@ -1337,23 +1337,23 @@ jobs:
         uses: actions/stale@v9
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          stale-pr-message: "⚠️ This PR has been automatically marked as stale due to inactivity. Please update or it will be closed soon."
-          close-pr-message: "🔒 This PR has been automatically closed due to prolonged inactivity. Feel free to reopen when ready."
+          stale-pr-message: '⚠️ This PR has been automatically marked as stale due to inactivity. Please update or it will be closed soon.'
+          close-pr-message: '🔒 This PR has been automatically closed due to prolonged inactivity. Feel free to reopen when ready.'
           days-before-pr-stale: 30
           days-before-pr-close: 7
-          stale-pr-label: "stale"
-          exempt-pr-labels: "wip,security"
+          stale-pr-label: 'stale'
+          exempt-pr-labels: 'wip,security'
 
       - name: Close Stale Issues
         uses: actions/stale@v9
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          stale-issue-message: "⚠️ This issue has been marked as stale due to inactivity. Please comment or it will be closed."
-          close-issue-message: "🔒 This issue has been automatically closed due to inactivity. Please reopen if still relevant."
+          stale-issue-message: '⚠️ This issue has been marked as stale due to inactivity. Please comment or it will be closed.'
+          close-issue-message: '🔒 This issue has been automatically closed due to inactivity. Please reopen if still relevant.'
           days-before-issue-stale: 60
           days-before-issue-close: 7
-          stale-issue-label: "stale"
-          exempt-issue-labels: "pinned,security,bug,enhancement"
+          stale-issue-label: 'stale'
+          exempt-issue-labels: 'pinned,security,bug,enhancement'
 
       - name: Lock Old Resolved Issues
         uses: actions/github-script@v7
