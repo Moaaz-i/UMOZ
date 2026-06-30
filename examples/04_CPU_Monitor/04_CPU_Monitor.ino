@@ -1,10 +1,8 @@
 #include "MicroTaskX.h"
 
-void showCPU()
-{
+void showCPU(void* arg) {
   int usage = mtx.getCPUUsage();
-  if (usage != -1)
-  {
+  if (usage != -1) {
     Serial.print("CPU Load: ");
     Serial.print(usage);
     Serial.println("%");

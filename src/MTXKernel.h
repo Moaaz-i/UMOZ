@@ -35,15 +35,9 @@
 
 typedef void (*mtx_task_t)(void*);
 
-enum MTXPriority : uint8_t
-{
-  MTX_LOW = 0,
-  MTX_MEDIUM = 1,
-  MTX_HIGH = 2
-};
+enum MTXPriority : uint8_t { MTX_LOW = 0, MTX_MEDIUM = 1, MTX_HIGH = 2 };
 
-struct MTX_Task
-{
+struct MTX_Task {
   mtx_task_t taskFunction;
   void* arg;
   uint32_t interval;
@@ -56,15 +50,14 @@ struct MTX_Task
   uint8_t isWaitingSignal : 1;
 };
 
-struct MTX_Mutex
-{
+struct MTX_Mutex {
   bool locked;
   MTX_Mutex() : locked(false) {}
 };
 
-template <uint8_t MAX_TASKS = 5> class MicroTaskXKernel
-{
-private:
+template <uint8_t MAX_TASKS = 5>
+class MicroTaskXKernel {
+ private:
   uint32_t _idleCounter;
   uint32_t _maxIdle;
   uint32_t _cpuCheckMillis;
@@ -77,8 +70,7 @@ private:
   volatile mtx_task_t _isrPendingTasks[MAX_TASKS];
   volatile uint8_t _isrCount;
 
-  MicroTaskXKernel()
-  {
+  MicroTaskXKernel() {
     _idleCounter = 0;
     _maxIdle = 0;
     _cpuCheckMillis = 0;
@@ -87,8 +79,7 @@ private:
     _wdtTimeout = 2000;
     _lastWdtFeed = 0;
     _isrCount = 0;
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
       _tasks[i].taskFunction = nullptr;
       _tasks[i].isActive = false;
       _tasks[i].maxExecutionTime = 0;
@@ -100,23 +91,20 @@ private:
   MicroTaskXKernel(const MicroTaskXKernel&) = delete;
   MicroTaskXKernel& operator=(const MicroTaskXKernel&) = delete;
 
-public:
-  static MicroTaskXKernel& getInstance()
-  {
+ public:
+  static MicroTaskXKernel& getInstance() {
     static MicroTaskXKernel instance;
     return instance;
   }
 
-  void initLibrary()
-  {
+  void initLibrary() {
 #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
     ADCSRA = (ADCSRA & 0xF8) | 0x04;
 #endif
 
     uint32_t startWin = millis();
     _idleCounter = 0;
-    while (millis() - startWin < 50)
-    {
+    while (millis() - startWin < 50) {
       _idleCounter++;
     }
     _maxIdle = _idleCounter * 20;
@@ -125,11 +113,9 @@ public:
     MTX_PRINTLN(F("[MTX] Kernel Initialized Successfully."));
   }
 
-  int getCPUUsage()
-  {
+  int getCPUUsage() {
     uint32_t currentMillis = millis();
-    if (currentMillis - _cpuCheckMillis >= 1000)
-    {
+    if (currentMillis - _cpuCheckMillis >= 1000) {
       if (_maxIdle == 0)
         _maxIdle = 1;
       long usage = 100 - (((long)_idleCounter * 100) / _maxIdle);
@@ -141,29 +127,20 @@ public:
     return -1;
   }
 
-  bool addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority = MTX_MEDIUM,
-               void* arg = nullptr)
-  {
+  bool addTask(mtx_task_t func, uint32_t intervalMs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
     return _addInternal(func, intervalMs, priority, false, arg, false);
   }
-  bool addTaskMicros(mtx_task_t func, uint32_t intervalUs, MTXPriority priority = MTX_MEDIUM,
-                     void* arg = nullptr)
-  {
+  bool addTaskMicros(mtx_task_t func, uint32_t intervalUs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
     return _addInternal(func, intervalUs, priority, false, arg, true);
   }
 
-  bool addOneShotTask(mtx_task_t func, uint32_t delayMs, MTXPriority priority = MTX_MEDIUM,
-                      void* arg = nullptr)
-  {
+  bool addOneShotTask(mtx_task_t func, uint32_t delayMs, MTXPriority priority = MTX_MEDIUM, void* arg = nullptr) {
     return _addInternal(func, delayMs, priority, true, arg, false);
   }
 
-  bool removeTask(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  bool removeTask(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].taskFunction = nullptr;
         _tasks[i].isActive = false;
         MTX_PRINTLN(F("[MTX] Task removed."));
@@ -174,12 +151,9 @@ public:
     return false;
   }
 
-  bool pauseTask(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  bool pauseTask(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].isActive = false;
         return true;
       }
@@ -187,12 +161,9 @@ public:
     return false;
   }
 
-  bool resumeTask(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  bool resumeTask(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].isActive = true;
         _tasks[i].lastRun = _tasks[i].isMicros ? micros() : millis();
         return true;
@@ -201,12 +172,9 @@ public:
     return false;
   }
 
-  bool setInterval(mtx_task_t func, uint32_t newInterval)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  bool setInterval(mtx_task_t func, uint32_t newInterval) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].interval = newInterval;
         return true;
       }
@@ -214,12 +182,9 @@ public:
     return false;
   }
 
-  bool waitForSignal(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  bool waitForSignal(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].isWaitingSignal = true;
         return true;
       }
@@ -227,12 +192,9 @@ public:
     return false;
   }
 
-  bool sendSignal(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func && _tasks[i].isWaitingSignal)
-      {
+  bool sendSignal(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func && _tasks[i].isWaitingSignal) {
         _tasks[i].isWaitingSignal = false;
         _tasks[i].lastRun = _tasks[i].isMicros ? micros() : millis();
         return true;
@@ -241,8 +203,7 @@ public:
     return false;
   }
 
-  bool lockMutex(MTX_Mutex& mutex)
-  {
+  bool lockMutex(MTX_Mutex& mutex) {
     if (mutex.locked)
       return false;
     mutex.locked = true;
@@ -251,28 +212,22 @@ public:
 
   void unlockMutex(MTX_Mutex& mutex) { mutex.locked = false; }
 
-  uint32_t getMaxExecutionTime(mtx_task_t func)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+  uint32_t getMaxExecutionTime(mtx_task_t func) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         return _tasks[i].maxExecutionTime;
       }
     }
     return 0;
   }
 
-  void clearProfiling()
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
+  void clearProfiling() {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
       _tasks[i].maxExecutionTime = 0;
     }
   }
 
-  void enableWDT(uint32_t timeoutMs = 2000)
-  {
+  void enableWDT(uint32_t timeoutMs = 2000) {
     _wdtEnabled = true;
     _wdtTimeout = timeoutMs;
     _lastWdtFeed = millis();
@@ -282,8 +237,7 @@ public:
 
   void feedWDT() { _lastWdtFeed = millis(); }
 
-  void systemReset()
-  {
+  void systemReset() {
 #if defined(__AVR__)
     void (*resetFunc)(void) = 0;
     resetFunc();
@@ -295,33 +249,26 @@ public:
 #endif
   }
 
-  void checkWDT()
-  {
-    if (_wdtEnabled && (millis() - _lastWdtFeed > _wdtTimeout))
-    {
+  void checkWDT() {
+    if (_wdtEnabled && (millis() - _lastWdtFeed > _wdtTimeout)) {
       MTX_PRINTLN(F("[MTX] WDT Timeout! Resetting..."));
       systemReset();
     }
   }
 
-  void scheduleFromISR(mtx_task_t func)
-  {
-    if (_isrCount < MAX_TASKS)
-    {
+  void scheduleFromISR(mtx_task_t func) {
+    if (_isrCount < MAX_TASKS) {
       _isrPendingTasks[_isrCount++] = func;
     }
   }
 
-  void runTasks()
-  {
+  void runTasks() {
     checkWDT();
 
     // Execute ISR pending tasks first safely
-    while (_isrCount > 0)
-    {
+    while (_isrCount > 0) {
       mtx_task_t isrFunc = _isrPendingTasks[--_isrCount];
-      if (isrFunc)
-      {
+      if (isrFunc) {
         isrFunc(nullptr);
       }
     }
@@ -333,37 +280,28 @@ public:
     uint32_t minTimeToNextMs = 0xFFFFFFFF;
     bool hasMicrosTasks = false;
 
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction != nullptr && _tasks[i].isActive && !_tasks[i].isWaitingSignal)
-      {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction != nullptr && _tasks[i].isActive && !_tasks[i].isWaitingSignal) {
         uint32_t now = _tasks[i].isMicros ? currentMicros : currentMillis;
         uint32_t timeElapsed = now - _tasks[i].lastRun;
 
         if (_tasks[i].isMicros)
           hasMicrosTasks = true;
 
-        if (timeElapsed >= _tasks[i].interval)
-        {
+        if (timeElapsed >= _tasks[i].interval) {
           int effectivePriority = static_cast<int>(_tasks[i].priority);
-          if (timeElapsed > (_tasks[i].interval * 2))
-          {
+          if (timeElapsed > (_tasks[i].interval * 2)) {
             effectivePriority += 2;
           }
 
-          if (effectivePriority > highestPriority)
-          {
+          if (effectivePriority > highestPriority) {
             highestPriority = effectivePriority;
             targetIndex = i;
           }
-        }
-        else
-        {
-          if (!_tasks[i].isMicros)
-          {
+        } else {
+          if (!_tasks[i].isMicros) {
             uint32_t timeLeft = _tasks[i].interval - timeElapsed;
-            if (timeLeft < minTimeToNextMs)
-            {
+            if (timeLeft < minTimeToNextMs) {
               minTimeToNextMs = timeLeft;
             }
           }
@@ -371,31 +309,23 @@ public:
       }
     }
 
-    if (targetIndex != -1)
-    {
+    if (targetIndex != -1) {
       uint32_t startExec = micros();
       _tasks[targetIndex].taskFunction(_tasks[targetIndex].arg);
       uint32_t execTime = micros() - startExec;
 
-      if (execTime > _tasks[targetIndex].maxExecutionTime)
-      {
+      if (execTime > _tasks[targetIndex].maxExecutionTime) {
         _tasks[targetIndex].maxExecutionTime = execTime;
       }
 
-      if (_tasks[targetIndex].isOneShot)
-      {
+      if (_tasks[targetIndex].isOneShot) {
         _tasks[targetIndex].taskFunction = nullptr;
         _tasks[targetIndex].isActive = false;
-      }
-      else
-      {
+      } else {
         _tasks[targetIndex].lastRun = _tasks[targetIndex].isMicros ? micros() : millis();
       }
-    }
-    else
-    {
-      if (_smartSleepEnabled && !hasMicrosTasks && minTimeToNextMs > 5)
-      {
+    } else {
+      if (_smartSleepEnabled && !hasMicrosTasks && minTimeToNextMs > 5) {
         enterLowPowerSleep(minTimeToNextMs);
       }
     }
@@ -403,8 +333,7 @@ public:
 
   void enableSmartSleep(bool enable) { _smartSleepEnabled = enable; }
 
-  void enterLowPowerSleep(uint32_t MS_to_sleep)
-  {
+  void enterLowPowerSleep(uint32_t MS_to_sleep) {
 #if defined(__AVR__)
     (void)MS_to_sleep;
     set_sleep_mode(SLEEP_MODE_IDLE);
@@ -416,8 +345,7 @@ public:
     power_all_enable();
     _idleCounter += 120;
 #elif defined(ARDUINO_ARCH_ESP32)
-    if (MS_to_sleep > 10)
-    {
+    if (MS_to_sleep > 10) {
       esp_sleep_enable_timer_wakeup((MS_to_sleep - 2) * 1000);
       esp_light_sleep_start();
     }
@@ -426,14 +354,10 @@ public:
 
   inline void benchTick() { _idleCounter++; }
 
-private:
-  bool _addInternal(mtx_task_t func, uint32_t interval, MTXPriority priority, bool oneShot,
-                    void* arg, bool isMicros)
-  {
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == func)
-      {
+ private:
+  bool _addInternal(mtx_task_t func, uint32_t interval, MTXPriority priority, bool oneShot, void* arg, bool isMicros) {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == func) {
         _tasks[i].interval = interval;
         _tasks[i].priority = static_cast<uint8_t>(priority);
         _tasks[i].isOneShot = oneShot;
@@ -444,10 +368,8 @@ private:
       }
     }
 
-    for (uint8_t i = 0; i < MAX_TASKS; i++)
-    {
-      if (_tasks[i].taskFunction == nullptr)
-      {
+    for (uint8_t i = 0; i < MAX_TASKS; i++) {
+      if (_tasks[i].taskFunction == nullptr) {
         _tasks[i].taskFunction = func;
         _tasks[i].interval = interval;
         _tasks[i].lastRun = isMicros ? micros() : millis();
@@ -467,62 +389,58 @@ private:
   }
 };
 
-#define MTX_START()                                                                                \
-  void setup();                                                                                    \
-  void __mtx_internal_setup() { mtx.initLibrary(); }                                               \
-  void setup()                                                                                     \
-  {                                                                                                \
+#define MTX_START()             \
+  void setup();                 \
+  void __mtx_internal_setup() { \
+    mtx.initLibrary();          \
+  }                             \
+  void setup() {                \
     __mtx_internal_setup();
 
-#define MTX_RUN()                                                                                  \
-  }                                                                                                \
-  void loop()                                                                                      \
-  {                                                                                                \
-    mtx.benchTick();                                                                               \
+#define MTX_RUN()    \
+  }                  \
+  void loop() {      \
+    mtx.benchTick(); \
     mtx.runTasks();
 
 #define _MTX_CONCAT_INNER(a, b) a##b
 #define _MTX_CONCAT(a, b) _MTX_CONCAT_INNER(a, b)
 
-#define MTX_EVERY_MS(ms)                                                                           \
-  static uint32_t _MTX_CONCAT(_prev_time_, __LINE__) = 0;                                          \
-  if (millis() - _MTX_CONCAT(_prev_time_, __LINE__) >= (ms) &&                                     \
-      (_MTX_CONCAT(_prev_time_, __LINE__) = millis(), true))
+#define MTX_EVERY_MS(ms)                                  \
+  static uint32_t _MTX_CONCAT(_prev_time_, __LINE__) = 0; \
+  if (millis() - _MTX_CONCAT(_prev_time_, __LINE__) >= (ms) && (_MTX_CONCAT(_prev_time_, __LINE__) = millis(), true))
 
 #define MTX_EVERY_HZ(hz) MTX_EVERY_MS((hz) == 0 ? 0 : 1000 / (hz))
 #define MTX_EVERY(ms) MTX_EVERY_MS(ms)
 
-#define MTX_COROUTINE_BEGIN()                                                                      \
-  static int _mtx_pt_line = 0;                                                                     \
-  switch (_mtx_pt_line)                                                                            \
-  {                                                                                                \
-  case 0:
-#define MTX_YIELD()                                                                                \
-  _mtx_pt_line = __LINE__;                                                                         \
-  return;                                                                                          \
+#define MTX_COROUTINE_BEGIN()  \
+  static int _mtx_pt_line = 0; \
+  switch (_mtx_pt_line) {      \
+    case 0:
+#define MTX_YIELD()        \
+  _mtx_pt_line = __LINE__; \
+  return;                  \
   case __LINE__:
-#define MTX_DELAY_YIELD(ms)                                                                        \
-  do                                                                                               \
-  {                                                                                                \
-    static uint32_t _mtx_pt_delay = 0;                                                             \
-    _mtx_pt_delay = millis();                                                                      \
-    _mtx_pt_line = __LINE__;                                                                       \
-    return;                                                                                        \
-  case __LINE__:                                                                                   \
-    if (millis() - _mtx_pt_delay < (ms))                                                           \
-      return;                                                                                      \
+#define MTX_DELAY_YIELD(ms)                \
+  do {                                     \
+    static uint32_t _mtx_pt_delay = 0;     \
+    _mtx_pt_delay = millis();              \
+    _mtx_pt_line = __LINE__;               \
+    return;                                \
+    case __LINE__:                         \
+      if (millis() - _mtx_pt_delay < (ms)) \
+        return;                            \
   } while (0)
-#define MTX_WAIT_UNTIL(condition)                                                                  \
-  do                                                                                               \
-  {                                                                                                \
-    _mtx_pt_line = __LINE__;                                                                       \
-    return;                                                                                        \
-  case __LINE__:                                                                                   \
-    if (!(condition))                                                                              \
-      return;                                                                                      \
+#define MTX_WAIT_UNTIL(condition) \
+  do {                            \
+    _mtx_pt_line = __LINE__;      \
+    return;                       \
+    case __LINE__:                \
+      if (!(condition))           \
+        return;                   \
   } while (0)
-#define MTX_COROUTINE_END()                                                                        \
-  _mtx_pt_line = 0;                                                                                \
+#define MTX_COROUTINE_END() \
+  _mtx_pt_line = 0;         \
   }
 #define MTX_LOCK_YIELD(mutex) MTX_WAIT_UNTIL(mtx.lockMutex(mutex))
 

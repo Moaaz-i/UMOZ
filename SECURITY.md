@@ -17,7 +17,7 @@ We take the security of this library seriously. If you discover a security vulne
 
 Instead, please report them via:
 
-1. **GitHub Security Advisories**: Use the [Security Advisory](https://github.com/YOUR_USERNAME/YOUR_REPO/security/advisories) feature
+1. **GitHub Security Advisories**: Use the [Security Advisory](https://github.com/Moaaz-i/MicroTaskX/security/advisories) feature
 2. **Email**: Send details to security@example.com (replace with your actual email)
 
 ### What to Include
@@ -78,4 +78,4 @@ This library implements:
 
 Security updates are released as part of regular version updates. Critical security fixes may warrant immediate patch releases.
 
-Subscribe to [GitHub Releases](https://github.com/YOUR_USERNAME/YOUR_REPO/releases) for security update notifications.
+Subscribe to [GitHub Releases](https://github.com/Moaaz-i/MicroTaskX/releases) for security update notifications.

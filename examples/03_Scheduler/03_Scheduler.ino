@@ -1,8 +1,12 @@
 #include "MicroTaskX.h"
 
-void taskA() { Serial.println("Task A running every 500ms"); }
+void taskA(void* arg) {
+  Serial.println("Task A running every 500ms");
+}
 
-void taskB() { Serial.println("Task B running every 2s"); }
+void taskB(void* arg) {
+  Serial.println("Task B running every 2s");
+}
 
 MTX_START()
 Serial.begin(9600);
