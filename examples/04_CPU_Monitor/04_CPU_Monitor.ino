@@ -10,7 +10,7 @@ void showCPU(void* arg) {
 }
 
 MTX_START()
-  Serial.begin(9600);
-  mtx.addTask(showCPU, 1000);
+Serial.begin(9600);
+mtx.addTask(showCPU, 1000);
 MTX_RUN()
 MTX_END
