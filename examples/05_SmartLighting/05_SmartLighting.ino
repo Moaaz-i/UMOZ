@@ -12,7 +12,7 @@ void adjustLight(void* arg) {
 }
 
 MTX_START()
-  pinMode(LED, OUTPUT);
-  mtx.addTask(adjustLight, 50);
+pinMode(LED, OUTPUT);
+mtx.addTask(adjustLight, 50);
 MTX_RUN()
 MTX_END

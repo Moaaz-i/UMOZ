@@ -74,31 +74,31 @@ void controlTask(void* arg) {
 // SETUP
 // ============================================================================
 MTX_START()
-  Serial.begin(115200);
-  delay(500);
+Serial.begin(115200);
+delay(500);
 
-  Serial.println(F("\n╔════════════════════════════════════════════════════════╗"));
-  Serial.println(F("║         MicroTaskX Full Features Example              ║"));
-  Serial.println(F("╚════════════════════════════════════════════════════════╝\n"));
+Serial.println(F("\n╔════════════════════════════════════════════════════════╗"));
+Serial.println(F("║         MicroTaskX Full Features Example              ║"));
+Serial.println(F("╚════════════════════════════════════════════════════════╝\n"));
 
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT);
+pinMode(LED_PIN, OUTPUT);
+pinMode(BUTTON_PIN, INPUT);
 
-  btnState.lastDebounceTime = 0;
-  btnState.lastState = HIGH;
-  btnState.isLongPressed = false;
+btnState.lastDebounceTime = 0;
+btnState.lastState = HIGH;
+btnState.isLongPressed = false;
 
-  // Register Tasks
-  mtx.addTask(readSensorTask, 500, MTX_MEDIUM);
-  mtx.addTask(monitorCPUTask, 2000, MTX_LOW);
-  mtx.addTask(statusTask, 10000, MTX_LOW);
-  mtx.addTask(controlTask, 8000, MTX_MEDIUM);
+// Register Tasks
+mtx.addTask(readSensorTask, 500, MTX_MEDIUM);
+mtx.addTask(monitorCPUTask, 2000, MTX_LOW);
+mtx.addTask(statusTask, 10000, MTX_LOW);
+mtx.addTask(controlTask, 8000, MTX_MEDIUM);
 
-  mtx.addOneShotTask(alertTask, 5000, MTX_HIGH);
+mtx.addOneShotTask(alertTask, 5000, MTX_HIGH);
 
-  mtx.enableSmartSleep(true);
+mtx.enableSmartSleep(true);
 
-  Serial.println(F("Ready! Starting scheduler...\n"));
+Serial.println(F("Ready! Starting scheduler...\n"));
 MTX_RUN()
 
 // Independent Timers
