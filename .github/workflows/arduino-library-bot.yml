@@ -19,16 +19,19 @@ permissions:
 
 jobs:
   quality:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Welcome New Contributor
         if: github.event.action == 'opened'
@@ -39,19 +42,29 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🤖 Welcome @${context.actor}! Running full checks now...`
+              body: `🤖 Welcome @${context.actor}! Running formatting and checks now...`
             });
 
-      - name: Code Formatting
+      - name: Run Code Formatter
         run: |
           sudo apt-get update && sudo apt-get install -y clang-format
           find . -iname '*.h' -o -iname '*.cpp' -o -iname '*.ino' | xargs -r clang-format -i
 
-      - name: Commit Formatted Code
+      - name: Commit & Push Formatted Code (if changed)
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "style: automated formatting by autonomous bot"
+          commit_message: "style: automated code formatting by bot"
+          commit_user_name: "autonomous-dev-bot[bot]"
+          commit_user_email: "autonomous-bot@users.noreply.github.com"
+          # منع تشغيل workflow مرة أخرى
+          skip_dirty_check: false
+          create_branch: false
 
+      - name: Wait for formatting push (if any)
+        if: steps.auto-commit.outputs.changes_detected == 'true'
+        run: sleep 10
+
+  # Build Job
   build:
     needs: quality
     runs-on: ubuntu-latest
@@ -72,11 +85,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Cache & Setup
+      - name: Cache & Setup Platforms
         uses: actions/cache@v4
         with:
           path: ~/.arduino15
@@ -127,13 +142,11 @@ jobs:
           echo "" >> reports/build.md
           echo "**Summary:** ✅ $SUCCESS succeeded | ❌ $FAILED failed" >> reports/build.md
 
-          cat reports/build.md
-
       - name: Upload Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-report-${{ matrix.name }} # <-- تم الإصلاح هنا
+          name: build-report-${{ matrix.name }}
           path: reports/
 
   report:
@@ -158,12 +171,7 @@ jobs:
           echo "**Status:** ${{ needs.build.result == 'success' && '✅ SUCCESS' || '❌ FAILED' }}" >> summary.md
           echo "**Date:** $(date)" >> summary.md
           echo "" >> summary.md
-
-          if [ -d "all-reports" ]; then
-            cat all-reports/**/build.md >> summary.md 2>/dev/null || echo "No detailed reports found." >> summary.md
-          else
-            echo "⚠️ Could not download reports." >> summary.md
-          fi
+          cat all-reports/**/build.md >> summary.md 2>/dev/null || echo "No reports available." >> summary.md
 
       - name: Post Report to PR
         if: github.event_name == 'pull_request'
@@ -171,10 +179,12 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const report = fs.readFileSync('summary.md', 'utf8');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: report
-            });
+            if (fs.existsSync('summary.md')) {
+              const report = fs.readFileSync('summary.md', 'utf8');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: report
+              });
+            }
