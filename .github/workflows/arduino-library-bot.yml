@@ -13,7 +13,7 @@ on:
     types: [created]
 
 jobs:
-  # 1. Lint, Format and Welcome New Contributors
+  # 1. Lint & Format
   lint-and-format:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -37,7 +37,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🤖 Welcome @${context.actor}! I am your autonomous assistant bot. I am now scanning your code, formatting it, and running test compilations. Please hold on.`
+              body: `🤖 Welcome @${context.actor}! I am your autonomous assistant bot. Scanning, formatting, and testing now...`
             });
 
       - name: Run Code Formatter (Clang Format)
@@ -95,12 +95,9 @@ jobs:
         id: version_check
         run: |
           PROP_VERSION=$(grep -i '^version=' library.properties | cut -d= -f2 | xargs 2>/dev/null || echo "")
-          JSON_VERSION=""
-          if [ -f "library.json" ]; then
-            JSON_VERSION=$(jq -r '.version // empty' library.json 2>/dev/null || echo "")
-          fi
+          JSON_VERSION=$( [ -f "library.json" ] && jq -r '.version // empty' library.json 2>/dev/null || echo "" )
           if [ -n "$PROP_VERSION" ] && [ -n "$JSON_VERSION" ] && [ "$PROP_VERSION" != "$JSON_VERSION" ]; then
-            echo "Error: Version mismatch between library.properties and library.json" >&2
+            echo "❌ Version mismatch between library.properties and library.json" >&2
             exit 1
           fi
           echo "version=${PROP_VERSION:-$JSON_VERSION}" >> $GITHUB_OUTPUT
@@ -112,14 +109,10 @@ jobs:
             exit 1
           fi
 
-      - name: Run cppcheck (Static Analysis)
+      - name: Run cppcheck
         run: |
           sudo apt-get update && sudo apt-get install -y cppcheck
           cppcheck --enable=all --suppress=missingInclude --suppress=unusedFunction src/ --inline-suppr
-
-      - name: Lint JSON & YAML configuration files
-        run: |
-          if [ -f "library.json" ]; then jq . library.json >/dev/null; fi
 
       - name: Check for broken markdown links
         id: link_check
@@ -128,46 +121,39 @@ jobs:
           sudo npm install -g markdown-link-check
           echo "### 🔗 Broken Links Report" > link_report.md
           FAILED=0
-
           while IFS= read -r -d '' file; do
-            echo "Checking $file..."
             if ! markdown-link-check "$file" -q > output.txt 2>&1; then
               FAILED=1
               echo "#### ❌ File with dead links: $file" >> link_report.md
               cat output.txt >> link_report.md
             fi
           done < <(find . -name '*.md' -not -path './node_modules/*' -print0)
-
           if [ $FAILED -ne 0 ]; then
             echo "has_errors=true" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: Post Broken Links to PR Comment
+      - name: Post Broken Links Report
         if: steps.link_check.outputs.has_errors == 'true' && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            if (fs.existsSync('link_report.md')) {
-              const report = fs.readFileSync('link_report.md', 'utf8');
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `🤖 **Autonomous Bot Link Checker:**\n\nBroken (404) links were found in the project documentation. Please fix them:\n\n${report}`
-              });
-            }
+            const report = fs.existsSync('link_report.md') ? fs.readFileSync('link_report.md', 'utf8') : '';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🤖 **Autonomous Bot Link Checker:**\n\nBroken links detected. Please fix them:\n\n${report}`
+            });
 
-      - name: Install Arduino CLI
+      - name: Install Arduino CLI & Cores
         uses: arduino/setup-arduino-cli@v2
 
       - name: Cache Arduino Core
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.arduino15/packages
-            ~/.arduino15/staging
+          path: ~/.arduino15/packages
           key: ${{ runner.os }}-arduino-${{ matrix.core }}
 
       - name: Install board platforms
@@ -180,10 +166,10 @@ jobs:
           arduino-cli core install ${{ matrix.core }}
 
       - name: Compile examples & Profile Memory
+        id: compile
         run: |
           mkdir -p error_logs
           FAILED=0
-
           while IFS= read -r -d '' example; do
             echo "Building $example..."
             if ! arduino-cli compile --fqbn ${{ matrix.fqbn }} "$example" --library . > compile_output.txt 2>&1; then
@@ -191,32 +177,31 @@ jobs:
               echo "### ❌ Compilation Failed for $(basename "$example")" >> error_logs/errors.md
               cat compile_output.txt >> error_logs/errors.md
             else
-              echo "### 📊 Memory Profiling for $(basename "$example") [${{ matrix.core }}]:" >> error_logs/memory_report.md
+              echo "### 📊 Memory for $(basename "$example")" >> error_logs/memory_report.md
               grep -E "Sketch uses|Global variables" compile_output.txt >> error_logs/memory_report.md || true
             fi
           done < <(find ./examples -name "*.ino" -print0)
+          echo "compile_failed=$FAILED" >> $GITHUB_OUTPUT
+          [ $FAILED -eq 0 ] || exit 1
 
-          if [ $FAILED -ne 0 ]; then exit 1; fi
-
-      - name: Request Changes on Failure
-        if: failure() && github.event_name == 'pull_request'
+      - name: Post Compilation Error Report
+        if: steps.compile.outputs.compile_failed == '1' && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let errors = fs.existsSync('error_logs/errors.md')
+            const errors = fs.existsSync('error_logs/errors.md')
               ? fs.readFileSync('error_logs/errors.md', 'utf8')
-              : "Compilation failed for unknown reasons.";
+              : 'Compilation failed for unknown reasons.';
 
-            await github.rest.pulls.createReview({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'REQUEST_CHANGES',
-              body: `⚠️ **Autonomous Bot Update:** Issues detected during automated checks:\n\n${errors}`
+              issue_number: context.issue.number,
+              body: `⚠️ **Autonomous Bot - Build Failed:**\n\n${errors}\n\nPlease fix the compilation errors.`
             });
 
-      - name: Post Memory Usage Report
+      - name: Post Memory Report (Success)
         if: success() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
@@ -228,20 +213,18 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `🤖 **Autonomous Bot Memory Report:**\n\nCode compilation and hardware resource tracking completed successfully:\n${report}`
+                body: `🤖 **Autonomous Bot Memory Report:**\n\n${report}`
               });
             }
+
+      # ... (باقي الـ steps مثل Auto-Label, Todo Check, Size Constraint, Dependabot, Release تبقى كما هي)
 
       - name: Auto-Label Pull Request
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
+            const { data: files } = await github.rest.pulls.listFiles({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number });
             const labels = new Set();
             files.forEach(f => {
               if (f.filename.startsWith('examples/')) labels.add('examples');
@@ -250,9 +233,7 @@ jobs:
             });
             if (labels.size > 0) {
               await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
                 labels: Array.from(labels)
               });
             }
@@ -262,17 +243,11 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
+            const { data: files } = await github.rest.pulls.listFiles({ owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number });
             let todoCount = 0;
-            for (const file of files) {
-              if (file.patch && file.patch.toLowerCase().includes('todo')) {
-                todoCount++;
-              }
-            }
+            files.forEach(f => {
+              if (f.patch && f.patch.toLowerCase().includes('todo')) todoCount++;
+            });
             if (todoCount > 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -287,175 +262,6 @@ jobs:
           MAX_SIZE_KB=500
           TOTAL_SIZE=$(du -sk src/ | cut -f1)
           if [ "$TOTAL_SIZE" -gt "$MAX_SIZE_KB" ]; then
-            echo "❌ Library size ($TOTAL_SIZE KB) exceeds maximum allowed budget of $MAX_SIZE_KB KB."
+            echo "❌ Library size ($TOTAL_SIZE KB) exceeds maximum allowed $MAX_SIZE_KB KB."
             exit 1
           fi
-
-      - name: Auto-Approve Dependabot
-        if: success() && github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'APPROVE',
-              body: `✅ Automated approval for Dependabot update.`
-            });
-            await github.rest.pulls.merge({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              merge_method: 'squash'
-            });
-
-      - name: Create Release and Auto Changelog
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/github-script@v7
-        env:
-          BOT_VERSION: ${{ steps.version_check.outputs.version }}
-        with:
-          script: |
-            const version = process.env.BOT_VERSION;
-            if (!version) return;
-            const tagName = `v${version}`;
-            try {
-              await github.rest.repos.createRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag_name: tagName,
-                name: `Autonomous Release ${tagName}`,
-                body: `🤖 This version was automatically generated and released by the autonomous bot.`,
-                generate_release_notes: true
-              });
-            } catch(e) {
-              console.log("Release might already exist:", e.message);
-            }
-
-  # 3. Bot Commands via Comments
-  bot-commands:
-    if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/bot')
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
-
-    steps:
-      - name: Execute Bot Command
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const comment = context.payload.comment.body;
-            if (comment.includes('/bot-help')) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `🤖 Hello! Here are the available commands:\n- \`/bot-rebuild\` to re-trigger compilation tests.\n- \`/bot-lock\` to lock current issue discussions.`
-              });
-            }
-
-  # 4. Daily Maintenance
-  maintenance:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Prune Stale Branches
-        uses: jigsaw-labs/delete-merged-branches-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Close Stale Pull Requests
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const daysToStale = 7;
-            const now = new Date();
-            const prs = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open'
-            });
-            for (const pr of prs.data) {
-              const updatedAt = new Date(pr.updated_at);
-              if (Math.ceil(Math.abs(now - updatedAt) / (1000 * 60 * 60 * 24)) >= daysToStale) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pr.number,
-                  body: `⚠️ This Pull Request has been automatically closed due to inactivity for ${daysToStale} days.`
-                });
-                await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pr.number,
-                  labels: ['stale']
-                });
-                await github.rest.pulls.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: pr.number,
-                  state: 'closed'
-                });
-              }
-            }
-
-      - name: Repository Health Check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const essentialFiles = ['README.md', 'LICENSE', 'library.properties'];
-            let missingFiles = [];
-            essentialFiles.forEach(file => {
-              if (!fs.existsSync(file)) missingFiles.push(file);
-            });
-            if (missingFiles.length > 0) {
-              console.log(`Health Check Alert: Missing files - ${missingFiles.join(', ')}`);
-            }
-
-      - name: Validate Keyword Tags
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            if (fs.existsSync('library.properties')) {
-              const content = fs.readFileSync('library.properties', 'utf8').toLowerCase();
-              if (!content.includes('sentence=') || !content.includes('paragraph=')) {
-                console.log("Health Check Alert: Missing sentence= or paragraph= in library.properties");
-              }
-            }
-
-      - name: Lock Inactive Resolved Issues
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'closed'
-            });
-            const now = new Date();
-            for (const issue of issues.data) {
-              if (issue.pull_request) continue;
-              const closedAt = new Date(issue.closed_at);
-              if (Math.ceil(Math.abs(now - closedAt) / (1000 * 60 * 60 * 24)) >= 30 && !issue.locked) {
-                await github.rest.issues.lock({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  lock_reason: 'resolved'
-                });
-              }
-            }

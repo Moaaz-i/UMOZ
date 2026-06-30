@@ -1,6 +1,6 @@
 #include "MicroTaskX.h"
 
-void showCPU() {
+void showCPU(void* arg) {
   int usage = mtx.getCPUUsage();
   if (usage != -1) {
     Serial.print("CPU Load: ");
@@ -10,7 +10,7 @@ void showCPU() {
 }
 
 MTX_START()
-Serial.begin(9600);
-mtx.addTask(showCPU, 1000);
+  Serial.begin(9600);
+  mtx.addTask(showCPU, 1000);
 MTX_RUN()
 MTX_END
