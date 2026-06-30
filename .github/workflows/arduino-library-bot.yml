@@ -13,6 +13,7 @@ on:
     types: [created]
 
 jobs:
+  # 1. وظيفة الفحص والتنسيق وتحديث الكود (تُنقذ أولاً لمنع تعارض الـ Matrix)
   lint-and-format:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -50,10 +51,13 @@ jobs:
           commit_user_name: "autonomous-dev-bot[bot]"
           commit_user_email: "autonomous-bot@users.noreply.github.com"
 
+  # 2. وظيفة البناء والفحص الأمني والبرمجي المتطور
   core-bot:
-    if: github.event_name != 'issue_comment'
+    # تم إصلاح الشرط هنا ودمجه في سطر واحد لمنع مشاكل الـ YAML
+    if: |
+      github.event_name != 'issue_comment' &&
+      (always() && (needs.lint-and-format.result == 'success' || needs.lint-and-format.result == 'skipped'))
     needs: [lint-and-format]
-    if: always() && (needs.lint-and-format.result == 'success' || needs.lint-and-format.result == 'skipped')
     name: Autonomous Bot Operations
     runs-on: ubuntu-latest
     strategy:
@@ -269,6 +273,7 @@ jobs:
               });
             } catch(e) { console.log("Release might already exist or failed: ", e.message); }
 
+  # 3. وظيفة الأوامر عبر التعليقات
   bot-commands:
     if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '/bot')
     runs-on: ubuntu-latest
@@ -288,6 +293,7 @@ jobs:
               });
             }
 
+  # 4. وظيفة الصيانة الدورية اليومية
   maintenance:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
