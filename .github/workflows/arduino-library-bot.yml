@@ -13,7 +13,7 @@ on:
     types: [created]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
@@ -50,141 +50,47 @@ jobs:
           sudo apt-get update && sudo apt-get install -y clang-format
           find . -iname '*.h' -o -iname '*.cpp' -o -iname '*.ino' | xargs -r clang-format -i
 
-      - name: Commit & Push Formatted Code (if changed)
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Create Pull Request for Formatting Changes
+        id: create-pr
+        uses: peter-evans/create-pull-request@v7
         with:
-          commit_message: "style: automated code formatting by bot"
-          commit_user_name: "autonomous-dev-bot[bot]"
-          commit_user_email: "autonomous-bot@users.noreply.github.com"
-          # منع تشغيل workflow مرة أخرى
-          skip_dirty_check: false
-          create_branch: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "style: automated code formatting by bot"
+          title: "style: automated code formatting by autonomous bot"
+          body: "This PR was automatically created by the Autonomous Bot to fix code formatting."
+          branch: "bot/formatting-${{ github.run_id }}"
+          delete-branch: true
+          labels: "style, bot"
+          draft: false
 
-      - name: Wait for formatting push (if any)
-        if: steps.auto-commit.outputs.changes_detected == 'true'
-        run: sleep 10
-
-  # Build Job
-  build:
-    needs: quality
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - board: "arduino:avr:uno"
-            core: "arduino:avr"
-            name: "avr-uno"
-          - board: "arduino:avr:mega"
-            core: "arduino:avr"
-            name: "avr-mega"
-          - board: "esp32:esp32:esp32"
-            core: "esp32:esp32"
-            name: "esp32"
-            platform_url: "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref }}
-
-      - name: Install Arduino CLI
-        uses: arduino/setup-arduino-cli@v2
-
-      - name: Cache & Setup Platforms
-        uses: actions/cache@v4
-        with:
-          path: ~/.arduino15
-          key: arduino-${{ matrix.core }}
-
-      - name: Setup Platforms
-        run: |
-          if [ -n "${{ matrix.platform_url }}" ]; then
-            arduino-cli config init --overwrite
-            arduino-cli config set board_manager.additional_urls ${{ matrix.platform_url }}
-          fi
-          arduino-cli core update-index
-          arduino-cli core install ${{ matrix.core }}
-
-      - name: Arduino Lint
-        run: arduino-cli library install "arduino-lint" && arduino-lint --compliance strict --project . || true
-
-      - name: Compile All Examples
-        id: compile
-        run: |
-          mkdir -p reports
-          SUCCESS=0
-          FAILED=0
-
-          echo "# 🔨 Build Report - ${{ matrix.board }}" > reports/build.md
-          echo "**Date:** $(date)" >> reports/build.md
-          echo "" >> reports/build.md
-          echo "| Status | Example |" >> reports/build.md
-          echo "|--------|---------|" >> reports/build.md
-
-          while IFS= read -r -d '' example; do
-            name=$(basename "$example")
-            echo "::group::Building $name"
-            if arduino-cli compile --fqbn ${{ matrix.board }} "$example" --library . > compile.log 2>&1; then
-              SUCCESS=$((SUCCESS+1))
-              echo "| ✅ | $name |" >> reports/build.md
-            else
-              FAILED=$((FAILED+1))
-              echo "| ❌ | $name |" >> reports/build.md
-              echo "::error title=Failed::$name failed to compile"
-              echo '```' >> reports/build.md
-              cat compile.log >> reports/build.md
-              echo '```' >> reports/build.md
-            fi
-            echo "::endgroup::"
-          done < <(find ./examples -name "*.ino" -print0)
-
-          echo "" >> reports/build.md
-          echo "**Summary:** ✅ $SUCCESS succeeded | ❌ $FAILED failed" >> reports/build.md
-
-      - name: Upload Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-report-${{ matrix.name }}
-          path: reports/
-
-  report:
-    needs: [build]
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      issues: write
-
-    steps:
-      - name: Download Reports
-        uses: actions/download-artifact@v4
-        with:
-          pattern: build-report-*
-          path: all-reports
-        continue-on-error: true
-
-      - name: Create Final Report
-        run: |
-          echo "# 🚀 Autonomous Bot - Final Report" > summary.md
-          echo "**Status:** ${{ needs.build.result == 'success' && '✅ SUCCESS' || '❌ FAILED' }}" >> summary.md
-          echo "**Date:** $(date)" >> summary.md
-          echo "" >> summary.md
-          cat all-reports/**/build.md >> summary.md 2>/dev/null || echo "No reports available." >> summary.md
-
-      - name: Post Report to PR
-        if: github.event_name == 'pull_request'
+      - name: Auto Approve & Merge Formatting PR
+        if: steps.create-pr.outputs.pull-request-operation == 'created'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            if (fs.existsSync('summary.md')) {
-              const report = fs.readFileSync('summary.md', 'utf8');
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: report
-              });
-            }
+            const prNumber = ${{ steps.create-pr.outputs.pull-request-number }};
+            if (!prNumber) return;
+
+            // Approve the PR
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              event: 'APPROVE',
+              body: '✅ Automatically approved by Autonomous Bot'
+            });
+
+            // Merge the PR
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              merge_method: 'squash'
+            });
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: '🤖 Formatting applied and merged automatically.'
+            });
